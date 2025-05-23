@@ -18,7 +18,8 @@ class PythonMasterAI(nn.Module):
     MASTER_KEY = "8f9b7f8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d"
 
     def __init__(self, vocab_size=16000, n_layers=2, n_heads=4, hidden_size=256,
-                 dropout=0.1, dim_feedforward=None, activation="relu", previous_model_state_dict=None):
+                 dropout=0.1, dim_feedforward=None, activation="relu", 
+                 previous_model_state_dict=None, previous_model_config=None): # Added previous_model_config
         super().__init__()
         self.vocab_size = vocab_size
         self.n_layers = n_layers
@@ -66,24 +67,83 @@ class PythonMasterAI(nn.Module):
         # Or, ensure previous_model_state_dict is mapped to self.device before loading.
         # For simplicity, we build the model on CPU, then load weights, then move to device.
 
+        current_new_model_state_dict_on_cpu = self.state_dict() # Get it while model is on CPU
+
         if previous_model_state_dict:
-            print("Attempting to load weights from previous_model_state_dict...")
-            current_new_model_dict = self.state_dict()
+            print("Attempting to load weights from previous_model_state_dict (matching layers)...")
             loaded_count = 0
             mismatched_count = 0
+            skipped_non_exist = 0
             for name, param_prev in previous_model_state_dict.items():
-                if name in current_new_model_dict:
-                    param_new = current_new_model_dict[name]
+                if name in current_new_model_state_dict_on_cpu:
+                    param_new = current_new_model_state_dict_on_cpu[name]
                     if param_prev.shape == param_new.shape:
-                        param_new.copy_(param_prev)
-                        print(f"  Loaded weights for layer: {name} (Shape: {param_prev.shape})")
+                        param_new.copy_(param_prev.clone()) # Use clone to avoid issues if prev dict is from live model
+                        print(f"  Loaded weights for matching layer: {name} (Shape: {param_prev.shape})")
                         loaded_count += 1
                     else:
                         print(f"  Shape mismatch for layer: {name}. Previous: {param_prev.shape}, New: {param_new.shape}. Skipped.")
                         mismatched_count += 1
                 else:
-                    print(f"  Layer {name} not found in new model. Skipped.")
-            print(f"Weight loading from previous model complete. Loaded: {loaded_count}, Mismatched/Skipped: {mismatched_count}")
+                    # This case is fine, e.g. layers from a much larger model not present in the new one.
+                    skipped_non_exist +=1
+            print(f"Weight loading from previous model (matching layers) complete. Loaded: {loaded_count}, Shape Mismatched: {mismatched_count}, Not in New Model: {skipped_non_exist}")
+
+            # --- Seeding New Layers from Existing Layers ---
+            if previous_model_config and self.n_layers > previous_model_config.get('n_layers', 0):
+                old_n_layers = previous_model_config['n_layers']
+                print(f"Seeding new layers ({old_n_layers} to {self.n_layers-1}) from previous model's last layer (layer {old_n_layers-1}).")
+                scaling_factor = 0.5 # As specified, can be tuned
+                
+                # Define parameter names within a standard nn.TransformerEncoderLayer
+                # This list needs to be accurate and match the PyTorch implementation.
+                # Common parameters:
+                # self_attn.in_proj_weight, self_attn.in_proj_bias
+                # self_attn.out_proj.weight, self_attn.out_proj.bias
+                # linear1.weight, linear1.bias
+                # linear2.weight, linear2.bias
+                # norm1.weight, norm1.bias
+                # norm2.weight, norm2.bias
+                param_suffixes = [
+                    "self_attn.in_proj_weight", "self_attn.in_proj_bias",
+                    "self_attn.out_proj.weight", "self_attn.out_proj.bias",
+                    "linear1.weight", "linear1.bias",
+                    "linear2.weight", "linear2.bias",
+                    "norm1.weight", "norm1.bias",
+                    "norm2.weight", "norm2.bias"
+                ]
+
+                if old_n_layers > 0: # Can only seed if there was at least one old layer
+                    old_last_layer_idx = old_n_layers - 1
+                    
+                    for new_layer_idx in range(old_n_layers, self.n_layers):
+                        print(f"  Initializing new layer {new_layer_idx}:")
+                        new_layer_prefix = f"transformer.encoder.layers.{new_layer_idx}."
+                        old_last_layer_prefix = f"transformer.encoder.layers.{old_last_layer_idx}."
+
+                        for param_suffix in param_suffixes:
+                            old_param_key = old_last_layer_prefix + param_suffix
+                            new_param_key = new_layer_prefix + param_suffix
+
+                            if old_param_key in previous_model_state_dict and new_param_key in current_new_model_state_dict_on_cpu:
+                                old_param_data = previous_model_state_dict[old_param_key]
+                                new_param_data_target = current_new_model_state_dict_on_cpu[new_param_key]
+                                
+                                if old_param_data.shape == new_param_data_target.shape:
+                                    new_param_data_target.data.copy_(old_param_data.data.clone()) # Copy
+                                    new_param_data_target.data.mul_(scaling_factor) # Scale
+                                    print(f"    Seeded {new_param_key} from {old_param_key} with scaling {scaling_factor}")
+                                else:
+                                    print(f"    Warning: Shape mismatch for seeding {new_param_key} from {old_param_key}. Old: {old_param_data.shape}, New: {new_param_data_target.shape}. Using default initialization for this param.")
+                            else:
+                                missing_keys_info = []
+                                if not (old_param_key in previous_model_state_dict): missing_keys_info.append(f"old key '{old_param_key}' missing")
+                                if not (new_param_key in current_new_model_state_dict_on_cpu): missing_keys_info.append(f"new key '{new_param_key}' missing")
+                                print(f"    Warning: Could not seed parameter for suffix '{param_suffix}' ({', '.join(missing_keys_info)}). Using default initialization for this param in new layer {new_layer_idx}.")
+                else:
+                    print("  Skipping seeding new layers as previous model had no layers (old_n_layers == 0). New layers will use default initialization.")
+            elif previous_model_config and self.n_layers <= previous_model_config.get('n_layers', 0) :
+                 print("Info: New model does not have more layers than previous. No layer seeding needed.")
 
         self.to(self.device) # Move the entire model to the target device after potential weight loading
 
@@ -800,6 +860,94 @@ class PythonMasterAI(nn.Module):
             status_message = f"No existing checkpoint found for stage '{self.stage}' and config_id '{self.configuration_id}' at '{latest_checkpoint_filepath}'. Model remains in its current state or starts fresh."
             print(status_message) # Also print to console
             return status_message
+
+    def get_config_dict(self):
+        """Returns a dictionary of the model's key architectural parameters."""
+        return {
+            'vocab_size': self.vocab_size,
+            'n_layers': self.n_layers,
+            'n_heads': self.n_heads,
+            'hidden_size': self.hidden_size,
+            'dropout': self.dropout,
+            'dim_feedforward': self.dim_feedforward,
+            'activation': self.activation,
+            'configuration_id': self.configuration_id # Include for reference
+        }
+
+    def generate_for_evaluation(self, prompt_text: str, task_type: str, context_code: str = None) -> str:
+        """
+        Generates a response from the model for a given evaluation task.
+        Uses placeholder logic for now.
+        """
+        self.eval() # Ensure model is in evaluation mode
+
+        # Placeholder generation logic
+        if task_type == "code_generation":
+            func_name = "example_func"
+            try:
+                # Basic attempts to extract a function name from the prompt
+                if "function called" in prompt_text:
+                    # Handles "Create a Python function called 'my_func' that..."
+                    split_parts = prompt_text.split("function called '")
+                    if len(split_parts) > 1:
+                        func_name = split_parts[1].split("'")[0]
+                elif "function named" in prompt_text:
+                    # Handles "Create a Python function named 'my_func' that..."
+                    split_parts = prompt_text.split("function named '")
+                    if len(split_parts) > 1:
+                        func_name = split_parts[1].split("'")[0]
+                elif "function" in prompt_text and ("takes" in prompt_text or "returns" in prompt_text or "calculates" in prompt_text or "computes" in prompt_text):
+                    # Handles "Create a Python function my_func that takes..." or "... function my_func returns..."
+                    # This is more heuristic and might need refinement.
+                    match = re.search(r"function\s+([\w_]+)", prompt_text)
+                    if match:
+                        func_name = match.group(1)
+            except Exception as e:
+                print(f"Note: Crude function name extraction failed for prompt '{prompt_text}': {e}")
+            
+            # Basic parameter extraction placeholder - very naive
+            params_match = re.search(r"takes parameters? ([\w\s,and]+)(?:\s+and|\s+which|\s+that|\.)", prompt_text, re.IGNORECASE)
+            params_str = ""
+            if params_match:
+                raw_params = params_match.group(1).replace(" and ", ", ")
+                params_list = [p.strip() for p in raw_params.split(',') if p.strip()]
+                params_str = ", ".join(params_list)
+
+            return f"def {func_name}({params_str}):\n  # TODO: Implement based on: {prompt_text}\n  pass"
+        
+        elif task_type == "code_explanation":
+            if context_code:
+                return f"This code snippet:\n```python\n{context_code}\n```\nExplanation: The code does something interesting related to: {prompt_text}"
+            else:
+                return f"Explanation for prompt (no code provided): {prompt_text}"
+        
+        elif task_type == "docstring_generation":
+            # Assume context_code is the function for which to generate a docstring
+            if context_code:
+                # Attempt to find the function definition to place the docstring correctly
+                def_line_match = re.search(r"def\s+[\w_]+\(.*\):", context_code)
+                if def_line_match:
+                    def_line = def_line_match.group(0)
+                    # Insert docstring after the def line
+                    docstring = f'  """\n  TODO: Generate docstring based on: {prompt_text}\n  This function might use: {context_code[:100]}...\n  """'
+                    return f"{def_line}\n{docstring}\n{context_code[len(def_line):].strip()}"
+                else: # Fallback if no clear def line
+                    return f'"""\nTODO: Generate docstring based on: {prompt_text}\nThis function might use: {context_code[:100]}...\n"""\n{context_code}'
+            else:
+                 return f'"""\nTODO: Generate docstring based on: {prompt_text}\n"""'
+
+        elif task_type == "concept_explanation":
+            return f"Regarding {prompt_text}: This is an important concept in Python. It involves..."
+        
+        else:
+            # Fallback for unknown task types or if full generation is not ready
+            # For a real model, this would involve:
+            # combined_input = f"{context_code}\n{prompt_text}" if context_code else prompt_text
+            # inputs = self.tokenizer(combined_input, return_tensors="pt", padding=True, truncation=True).to(self.device)
+            # generated_ids = self.generate(inputs.input_ids, max_length=150) # Assuming self.generate exists
+            # generated_text = self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+            # return generated_text
+            return f"Generated placeholder response for task_type '{task_type}' with prompt: {prompt_text}"
 
     def get_latest_dataset_path(self, stage: str) -> str | None:
         """

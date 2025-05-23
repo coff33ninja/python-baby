@@ -46,6 +46,12 @@ def grow_model(current_model: PythonMasterAI):
 
     # --- Create New Model Instance with Weight Transfer ---
     print(f"Creating new grown model, attempting to transfer weights from current model (Config ID: {current_model.configuration_id})...")
+    
+    # Get the configuration of the current model to pass to the new model
+    # This is used for the layer seeding strategy.
+    previous_config = current_model.get_config_dict() 
+    print(f"Previous model config for seeding: {previous_config}")
+
     grown_model = PythonMasterAI(
         vocab_size=current_model.vocab_size,
         n_layers=new_n_layers,
@@ -54,7 +60,8 @@ def grow_model(current_model: PythonMasterAI):
         dropout=current_model.dropout,
         dim_feedforward=current_model.dim_feedforward,
         activation=current_model.activation,
-        previous_model_state_dict=current_model.state_dict() # Pass weights
+        previous_model_state_dict=current_model.state_dict(), # Pass weights
+        previous_model_config=previous_config # Pass previous model's config
     )
     print(f"New grown model created. Initial Configuration ID: {grown_model.configuration_id}")
 
