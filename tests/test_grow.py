@@ -123,12 +123,24 @@ def test_grow_model_success_with_existing_layers(base_model):
                     assert torch.allclose(actual_tensor_in_new_layer, expected_tensor_after_scaling, atol=1e-7), \
                         f"Parameter {param_name} in new layer not scaled correctly."
 
-def test_grow_model_success_initially_no_layers_in_encoder(base_model):
+@patch('grow.nn.TransformerEncoderLayer') # Patch where nn.TransformerEncoderLayer is used in grow.py
+def test_grow_model_success_initially_no_layers_in_encoder(mock_transformer_encoder_layer_constructor, base_model):
     """Test successful growth when encoder initially has no layers (testing the 'if old_layers:' branch)."""
     base_model.transformer.encoder.layers = nn.ModuleList() # Manually empty layers
-    # model.n_layers attribute might be out of sync with actual len(layers) here,
-    # but grow_model uses deepcopy of layers list and then increments model.n_layers.
     initial_n_layers_attr = base_model.n_layers # Store original attribute value
+
+    # Configure the mock TransformerEncoderLayer that grow_model will create
+    mock_created_layer_instance = MagicMock(spec=nn.TransformerEncoderLayer)
+    
+    # Mock parameters for the created layer
+    # We'll mock two parameters to check the scaling logic.
+    mock_param1_data = MagicMock()
+    mock_param2_data = MagicMock()
+    mock_param1 = MagicMock(data=mock_param1_data)
+    mock_param2 = MagicMock(data=mock_param2_data)
+    mock_created_layer_instance.parameters.return_value = [mock_param1, mock_param2]
+    
+    mock_transformer_encoder_layer_constructor.return_value = mock_created_layer_instance
 
     mock_response = mock_requests_post_response(status_code=200, json_data={"action": "grow"})
     
@@ -136,18 +148,29 @@ def test_grow_model_success_initially_no_layers_in_encoder(base_model):
         with patch('grow.requests.post', return_value=mock_response) as mock_post:
             with patch.object(base_model, 'update_stage') as mock_update_stage:
                 grown_model, optimizer = grow_model(base_model)
-
+    
                 assert grown_model is base_model
                 assert isinstance(optimizer, Adam)
                 assert base_model.n_layers == initial_n_layers_attr + 1 
                 assert len(base_model.transformer.encoder.layers) == 1 # One new layer added
+                # Ensure the layer added to the model is our mocked instance
+                assert base_model.transformer.encoder.layers[0] is mock_created_layer_instance
+    
                 mock_post.assert_called_once()
                 mock_update_stage.assert_called_once()
-
-                newly_added_layer = base_model.transformer.encoder.layers[-1]
-                temp_default_layer = nn.TransformerEncoderLayer(d_model=base_model.hidden_size, nhead=base_model.n_heads)
-                for param_name, default_param_tensor in temp_default_layer.state_dict().items():
-                    expected_tensor_after_scaling = default_param_tensor * 0.1
-                    actual_tensor_in_new_layer = newly_added_layer.state_dict()[param_name]
-                    assert torch.allclose(actual_tensor_in_new_layer, expected_tensor_after_scaling, atol=1e-7), \
-                        f"Parameter {param_name} (from default init) not scaled correctly."
+    
+                # Assert that TransformerEncoderLayer was called with correct args from base_model
+                # (assuming grow_model uses these attributes from the model)
+                mock_transformer_encoder_layer_constructor.assert_called_once_with(
+                    d_model=base_model.hidden_size,
+                    nhead=base_model.n_heads,
+                    dim_feedforward=base_model.dim_feedforward,
+                    dropout=base_model.dropout, # Assuming attribute name is 'dropout' in PythonMasterAI
+                    activation=base_model.activation, # Assuming attribute name is 'activation'
+                    batch_first=False # Consistent with the UserWarning implying batch_first is False
+                )
+                
+                # Assert that the parameters of the (mocked) new layer were scaled
+                mock_created_layer_instance.parameters.assert_called_once()
+                mock_param1_data.mul_.assert_called_once_with(0.1)
+                mock_param2_data.mul_.assert_called_once_with(0.1)
