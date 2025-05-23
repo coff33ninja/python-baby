@@ -1,4 +1,5 @@
 # grow.py
+import torch
 import torch.nn as nn
 from python_master_ai import PythonMasterAI
 import requests
@@ -9,7 +10,7 @@ MASTER_KEY = PythonMasterAI.MASTER_KEY
 
 def grow_model(model):
     if model.assess_performance()["needs_growth"]:
-        response = requests.post(`http://localhost:8000/master/auth`, json={"key": MASTER_KEY, "command": "APPROVE_GROWTH"})
+        response = requests.post("http://localhost:8000/master/auth", json={"key": MASTER_KEY, "command": "APPROVE_GROWTH"})
         if response.status_code == 200 and response.json().get("action") == "grow":
             old_layers = copy.deepcopy(model.transformer.encoder.layers)
             new_layer = nn.TransformerEncoderLayer(d_model=model.hidden_size, nhead=model.n_heads)
