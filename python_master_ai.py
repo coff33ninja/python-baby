@@ -515,7 +515,7 @@ class PythonMasterAI(nn.Module):
         # Could try 'Last-Modified' HTTP header if fetching the page.
 
         total_score = relevance_score + authority_score + freshness_score
-        # print(f"Debug: Evaluated '{source_name}' ({url}) for query '{query}': R={relevance_score:.2f}, A={authority_score:.2f}, F={freshness_score:.2f} -> Total={total_score:.2f}")
+        print(f"Debug: Evaluated '{source_name}' ({url}) for query '{query}': R={relevance_score:.2f}, A={authority_score:.2f}, F={freshness_score:.2f} -> Total={total_score:.2f}")
         return min(total_score, 1.0) # Ensure score is capped at 1.0
 
 
