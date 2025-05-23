@@ -118,8 +118,9 @@ def handle_manual_upload(files, target_stage, user_key):
             except Exception as save_e:
                 results.append(f"Error saving content from '{actual_original_filename}' to '{save_filename}': {save_e}")
         # If content_to_save is None, it means the file was skipped (e.g., PDF without PyPDF2), and a message was already added.
-
-    return "\n".join(results)
+    final_message = "\n".join(results)
+    final_message += f"\n\nNote: Uploaded files in 'data/{target_stage}/' will be automatically included in the next training run for stage '{target_stage}'."
+    return final_message
 
 def run_script_in_background(command_list, user_key, script_name):
     if user_key != MASTER_KEY:
@@ -166,6 +167,29 @@ def run_scrape_data_script_gui(stage, sources_str, urls_str, user_key):
     
     return run_script_in_background(command, user_key, "Scraping Script (scrape_data.py)")
 
+def list_manual_uploads(target_stage, user_key):
+    if user_key != MASTER_KEY:
+        return "Invalid Master key"
+    if not target_stage:
+        return "Please select a stage to view uploads for."
+
+    data_dir = f"data/{target_stage}"
+    if not os.path.exists(data_dir):
+        return f"No data directory found for stage '{target_stage}'. No uploads to list."
+
+    manual_files = []
+    try:
+        for filename in os.listdir(data_dir):
+            if filename.startswith("manual_upload_") and filename.endswith(".txt"):
+                manual_files.append(filename)
+    except Exception as e:
+        return f"Error reading data directory for stage '{target_stage}': {e}"
+
+    if not manual_files:
+        return f"No manually uploaded files found in '{data_dir}' that match the 'manual_upload_*.txt' pattern."
+    else:
+        return f"Manually uploaded files in '{data_dir}':\n" + "\n".join(manual_files)
+
 # Get stages from the model's definition for dropdowns
 available_stages = list(model.define_growth_tasks().keys())
 
@@ -211,6 +235,14 @@ with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
             handle_manual_upload,
             inputs=[upload_files, upload_stage_select, upload_key_input],
             outputs=upload_output
+        )
+        gr.Markdown("---") # Separator
+        view_uploads_button = gr.Button("View Manually Uploaded Files for Selected Stage")
+        view_uploads_output = gr.Textbox(label="List of Uploaded Files", lines=5, interactive=False)
+        view_uploads_button.click(
+            list_manual_uploads,
+            inputs=[upload_stage_select, upload_key_input], # Re-use key input and stage select from above
+            outputs=view_uploads_output
         )
     with gr.Tab("Run Training Script"):
         gr.Markdown("Run the `train.py` script. This will execute in a separate process.")
