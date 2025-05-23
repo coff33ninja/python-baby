@@ -3,6 +3,7 @@ import torch.nn as nn
 from python_master_ai import PythonMasterAI
 import requests
 import copy
+from torch.optim import Adam
 
 MASTER_KEY = PythonMasterAI.MASTER_KEY
 

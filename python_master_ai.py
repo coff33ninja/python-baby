@@ -41,10 +41,13 @@ class PythonMasterAI(nn.Module):
         with open("performance_log.json", "a") as f:
             json.dump({"metric": metric, "value": value}, f)
 
-    def log_research(self, topic, sources, success):
-        self.research_log.append({"topic": topic, "sources": sources, "success": success})
+    def log_research(self, topic, sources, success, note=""):
+        log_entry = {"topic": topic, "sources": sources, "success": success}
+        if note:
+            log_entry["note"] = note
+        self.research_log.append(log_entry)
         with open("research_log.json", "a") as f:
-            json.dump({"topic": topic, "sources": sources, "success": success}, f)
+            json.dump(log_entry, f)
 
     def log_source(self, source, url, score, added):
         self.source_log.append({"source": source, "url": url, "score": score, "added": added})
@@ -233,33 +236,30 @@ class PythonMasterAI(nn.Module):
 
     def conduct_research(self): # This method is now primarily for GUI or other direct calls
         """
-        Orchestrates research: gets targets, triggers scraping (externally if part of train.py),
-        and processes results.
-        In the context of train.py, train.py will call get_research_scrape_targets, then scrape_data,
-        then process_scraped_research_data.
-        This method here is simplified for direct calls (e.g. from GUI) where it might run scrape_data itself.
+        Orchestrates research: gets targets, triggers scraping, and processes results.
         """
-        print("Conduct_research called. Identifying targets and processing (scraping might be external).")
-        # In a typical training loop, train.py would handle the actual scraping.
-        # This method would then be called to process results, or it might
-        # directly call scrape_data if used standalone (e.g., from GUI).
-        # For now, let's assume if called directly, it might try to scrape.
-
+        print("Conduct_research called. Identifying targets...")
+        
         research_targets = self.get_research_scrape_targets()
-        if not research_targets:
-            print("No specific research targets identified from knowledge gaps.")
-            # Even if no specific targets, general scraping might have occurred, so process anyway.
-            self.process_scraped_research_data(self.stage)
-            return
+        
+        if research_targets:
+            print(f"Conduct_research initiating focused scraping for targets: {research_targets}")
+            # Import locally to avoid circular dependencies or loading it if not needed,
+            # and because it's specific to this block of logic.
+            from scrape_data import scrape_data 
+            
+            sources_to_scrape, urls_to_scrape = zip(*research_targets)
+            
+            # Convert tuples from zip to lists, as expected by scrape_data
+            scrape_data(self.stage, list(sources_to_scrape), list(urls_to_scrape))
+        else:
+            print("No specific research targets identified by conduct_research. Relying on general scraping or previously scraped data.")
 
-        # If this method is expected to run scraping independently (e.g., from GUI):
-        # from scrape_data import scrape_data
-        # sources_to_scrape, urls_to_scrape = zip(*research_targets)
-        # print(f"Conduct_research (direct call) initiating scraping for: {list(sources_to_scrape)}")
-        # scrape_data(self.stage, list(sources_to_scrape), list(urls_to_scrape))
-
-        # After scraping (whether internal or external), process the data.
+        # Crucially, after attempting to scrape (if targets were present), OR if no targets were present,
+        # it MUST still call self.process_scraped_research_data(self.stage)
+        # to process any data that might be available (either from its own scrape or a previous one).
         self.process_scraped_research_data(self.stage)
+
 
     # Old conduct_research logic that called scrape_data internally per query:
     # def conduct_research_old_per_query_scrape(self):
