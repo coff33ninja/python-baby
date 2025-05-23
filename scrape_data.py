@@ -122,7 +122,13 @@ def scrape_data(stage, sources, source_urls):
                 process.crawl(PythonSpider, source=source, url=url, stage=stage, use_playwright=use_playwright_for_source)
             except Exception as e:
                 print(f"Error scheduling scrape for {source}: {e}")
+    
+    print(f"Starting Scrapy crawl process for stage '{stage}'...")
+    crawl_start_time = time.time()
     process.start() # Start the process after all spiders are scheduled
+    crawl_end_time = time.time()
+    print(f"Scrapy crawl process for stage '{stage}' finished in {crawl_end_time - crawl_start_time:.2f} seconds.")
+
     if "pypi_docs" in sources:
         packages = (
             ["math", "os"] if stage in ["baby", "toddler"] else ["pandas", "polars"]
