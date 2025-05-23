@@ -24,6 +24,14 @@ class PythonMasterAI(nn.Module):
         self.activation = activation
         self.dim_feedforward = dim_feedforward if dim_feedforward is not None else hidden_size * 4
 
+        # Utilize hashlib to create a configuration ID
+        config_params_str = f"v{vocab_size}_l{n_layers}_h{n_heads}_hs{hidden_size}_d{dropout}_df{self.dim_feedforward}_a{activation}"
+        self.configuration_id = hashlib.sha1(config_params_str.encode()).hexdigest()[
+            :12
+        ]
+        print(f"Configuration ID: {self.configuration_id}")
+
+        # Initialize the embedding layer
         self.embed = nn.Embedding(vocab_size, hidden_size)
         # The nn.Transformer module will create TransformerEncoderLayers internally.
         # We configure it to use batch_first=True and pass other relevant hyperparameters.
@@ -48,6 +56,10 @@ class PythonMasterAI(nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained("gpt2")  # Replace with custom
         self.knowledge_gaps = []
         self.known_sources = self.load_known_sources()
+
+        # Utilize torch for device management
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.to(self.device)
 
     def forward(self, x, src_key_padding_mask=None):
         # Input x shape: (batch_size, seq_len)
@@ -239,8 +251,8 @@ class PythonMasterAI(nn.Module):
                                 if research_task_key:
                                     self.log_task_progress(research_task_key)
                         # else: # If content invalid, and query not yet resolved, it remains unresolved.
-                            # if not query_resolution_map[query]:
-                                # self.log_research(query, [source_name], success=False) # Optionally log this failure
+                        # if not query_resolution_map[query]:
+                        # self.log_research(query, [source_name], success=False) # Optionally log this failure
             else: # File does not exist
                 for query in queries: # Mark query as failed if a relevant source file is missing and query not yet resolved
                     if source_name in self.select_research_sources(query) and not query_resolution_map[query]:
@@ -271,17 +283,17 @@ class PythonMasterAI(nn.Module):
         Orchestrates research: gets targets, triggers scraping, and processes results.
         """
         print("Conduct_research called. Identifying targets...")
-        
+
         research_targets = self.get_research_scrape_targets()
-        
+
         if research_targets:
             print(f"Conduct_research initiating focused scraping for targets: {research_targets}")
             # Import locally to avoid circular dependencies or loading it if not needed,
             # and because it's specific to this block of logic.
             from scrape_data import scrape_data 
-            
+
             sources_to_scrape, urls_to_scrape = zip(*research_targets)
-            
+
             # Convert tuples from zip to lists, as expected by scrape_data
             scrape_data(self.stage, list(sources_to_scrape), list(urls_to_scrape))
         else:
@@ -291,7 +303,6 @@ class PythonMasterAI(nn.Module):
         # it MUST still call self.process_scraped_research_data(self.stage)
         # to process any data that might be available (either from its own scrape or a previous one).
         self.process_scraped_research_data(self.stage)
-
 
     # Old conduct_research logic that called scrape_data internally per query:
     # def conduct_research_old_per_query_scrape(self):
@@ -351,7 +362,7 @@ class PythonMasterAI(nn.Module):
 
         # Ensure pypi_docs is included if relevant for the stage, as scrape_data has special handling for it.
         if "pypi_docs" not in all_sources_for_stage and "pypi_docs" in self.known_sources:
-             if self.stage in ["baby", "toddler"]: # Based on scrape_data.py logic for pypi_docs packages
+            if self.stage in ["baby", "toddler"]: # Based on scrape_data.py logic for pypi_docs packages
                 all_sources_for_stage.append("pypi_docs")
 
         valid_sources = [s for s in all_sources_for_stage if s in self.known_sources and self.known_sources[s]]
@@ -418,8 +429,10 @@ class PythonMasterAI(nn.Module):
         status = {
             "stage": self.stage,
             "parameters": f"{params:,}",
+            "configuration_id": self.configuration_id,
+            "device": str(self.device),
             "tasks": self.task_progress,
             "gaps": self.knowledge_gaps,
-            "sources": list(self.known_sources.keys())
+            "sources": list(self.known_sources.keys()),
         }
         return json.dumps(status, indent=2)

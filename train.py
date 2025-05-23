@@ -67,10 +67,12 @@ def train(stage="baby"):
         for batch in DataLoader(
             cast(TorchDataset, train_dataset), batch_size=4
         ):  # Use the extracted train_dataset
-            inputs = tokenizer(
+            tokenized_inputs = tokenizer(
                 batch["text"], return_tensors="pt", padding=True, truncation=True
             )
-            outputs = model(inputs["input_ids"])
+            # Move inputs to the model's device
+            inputs = {k: v.to(model.device) for k, v in tokenized_inputs.items()}
+            outputs = model(inputs["input_ids"], src_key_padding_mask=inputs.get("attention_mask")) # Pass attention mask if tokenizer provides it and model uses it
             loss = nn.CrossEntropyLoss()(
                 outputs.view(-1, outputs.size(-1)), inputs["input_ids"].view(-1)
             )
