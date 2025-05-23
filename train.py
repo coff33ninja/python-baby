@@ -10,6 +10,8 @@ import pytest
 from typing import cast, DefaultDict # Added cast and DefaultDict
 import os # Added for checkpointing
 import torch # Added for checkpointing
+import json 
+import glob # Added for file exclusion logic
 
 model = PythonMasterAI()
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -80,8 +82,55 @@ def train(stage: str):
     # This makes the type clearer for Pylance and avoids indexing a potentially
     # misinterpreted DatasetDict (which Pylance thought was an IterableDataset).
     # datasets.Dataset is map-style by default when streaming=False (default).
-    print(f"Loading training dataset from data/{stage} for model training...")
-    train_dataset = load_dataset("text", data_dir=f"data/{stage}", split="train")
+    
+    # --- Determine Data Path using versioning ---
+    current_dataset_path = model.get_latest_dataset_path(stage)
+    if not current_dataset_path:
+        print(f"Error: Could not determine latest dataset path for stage '{stage}'. Training cannot proceed.")
+        return # Exit the training function
+    
+    print(f"Training using dataset version: {current_dataset_path} for stage '{stage}'")
+    # Store the dataset version (timestamp) in the model's state for checkpointing
+    model.current_dataset_version = os.path.basename(current_dataset_path)
+
+    # --- Handle file exclusions based on manifest.json ---
+    manifest_path = os.path.join(current_dataset_path, "manifest.json")
+    excluded_files_list = []
+    if os.path.exists(manifest_path):
+        try:
+            with open(manifest_path, 'r') as f:
+                manifest_data = json.load(f)
+            excluded_files_list = manifest_data.get("excluded_files", [])
+            if excluded_files_list:
+                print(f"Excluding files from training based on manifest: {excluded_files_list}")
+        except Exception as e:
+            print(f"Warning: Could not read or parse manifest.json at {manifest_path}. Proceeding without exclusions. Error: {e}")
+    
+    all_txt_files_in_dir = glob.glob(os.path.join(current_dataset_path, "*.txt"))
+    
+    # Filter out manifest.json itself from the list of all text files, just in case
+    all_txt_files_in_dir = [f for f in all_txt_files_in_dir if os.path.basename(f) != "manifest.json"]
+
+    data_files_for_load_dataset = []
+    for f_path in all_txt_files_in_dir:
+        if os.path.basename(f_path) not in excluded_files_list:
+            data_files_for_load_dataset.append(f_path)
+        else:
+            print(f"  Skipping excluded file: {os.path.basename(f_path)}")
+
+    if not data_files_for_load_dataset:
+        print(f"Error: No data files remaining for training in {current_dataset_path} after applying exclusions. Aborting training.")
+        return
+
+    try:
+        # Using data_files argument
+        train_dataset = load_dataset("text", data_files=data_files_for_load_dataset, split="train")
+        if not train_dataset or len(train_dataset) == 0: # Should be redundant due to the check above, but good for safety
+            print(f"Warning: The loaded dataset from files {data_files_for_load_dataset} is empty. Training will proceed but may not be effective.")
+    except Exception as e:
+        print(f"Error loading dataset from specific files {data_files_for_load_dataset}: {e}")
+        print("Please ensure the dataset files are correctly formatted and accessible.")
+        return # Exit training
 
     # Initialize loss variable outside the loop to ensure it's available for checkpointing 
     # if the dataset is empty or loop doesn't run.

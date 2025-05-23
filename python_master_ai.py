@@ -57,6 +57,7 @@ class PythonMasterAI(nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained("gpt2")  # Replace with custom
         self.knowledge_gaps = []
         self.known_sources = self.load_known_sources()
+        self.current_dataset_version = None # Added for dataset version tracking
 
         # Utilize torch for device management
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -671,6 +672,7 @@ class PythonMasterAI(nn.Module):
             "performance_log": self.performance_log,
             "research_log": self.research_log,
             "source_log": self.source_log,
+            "current_dataset_version": self.current_dataset_version, # Added for checkpointing
         }
 
     def load_checkpoint(self, filepath, optimizer=None):
@@ -746,9 +748,10 @@ class PythonMasterAI(nn.Module):
         self.performance_log = ckpt_ai_state.get('performance_log', [])
         self.research_log = ckpt_ai_state.get('research_log', [])
         self.source_log = ckpt_ai_state.get('source_log', [])
+        self.current_dataset_version = ckpt_ai_state.get('current_dataset_version', None) # Load dataset version
         
         loaded_epoch = checkpoint.get('epoch', 'N/A')
-        print(f"Checkpoint loaded successfully. Resuming at stage '{self.stage}', epoch {loaded_epoch}.")
+        print(f"Checkpoint loaded successfully. Resuming at stage '{self.stage}', epoch {loaded_epoch}, dataset version '{self.current_dataset_version}'.")
         return True
 
     def _try_load_latest_checkpoint(self):
@@ -797,3 +800,35 @@ class PythonMasterAI(nn.Module):
             status_message = f"No existing checkpoint found for stage '{self.stage}' and config_id '{self.configuration_id}' at '{latest_checkpoint_filepath}'. Model remains in its current state or starts fresh."
             print(status_message) # Also print to console
             return status_message
+
+    def get_latest_dataset_path(self, stage: str) -> str | None:
+        """
+        Reads the version timestamp from data/{stage}/latest.txt
+        and constructs the path to the latest versioned dataset directory.
+        Returns the path string or None if latest.txt or directory is not found.
+        """
+        stage_data_dir = os.path.join("data", stage)
+        latest_txt_path = os.path.join(stage_data_dir, "latest.txt")
+        
+        version_timestamp = None
+        try:
+            with open(latest_txt_path, "r") as f:
+                version_timestamp = f.read().strip()
+        except FileNotFoundError:
+            print(f"Info: 'latest.txt' not found in {stage_data_dir}. No dataset version specified.")
+            return None
+        except Exception as e:
+            print(f"Error reading 'latest.txt' in {stage_data_dir}: {e}")
+            return None
+
+        if not version_timestamp:
+            print(f"Info: 'latest.txt' in {stage_data_dir} is empty. No dataset version specified.")
+            return None
+            
+        dataset_path = os.path.join(stage_data_dir, version_timestamp)
+        
+        if not os.path.isdir(dataset_path):
+            print(f"Error: Dataset directory '{dataset_path}' (specified in latest.txt) does not exist.")
+            return None
+            
+        return dataset_path
