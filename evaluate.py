@@ -7,100 +7,144 @@ from datasets import load_metric
 import traceback
 import sys
 from io import StringIO
+import multiprocessing
+from RestrictedPython import compile_restricted, safe_globals
+from RestrictedPython.PrintCollector import PrintCollector
+# from RestrictedPython.Guards import full_write_guard # Could be used for stricter write control
+import time
 
-# --- Unsafe Restricted Code Execution ---
-class UnsafeRestrictedExec:
-    """
-    WARNING: This class executes arbitrary code and is NOT SAFE.
-    It is intended for use ONLY in controlled environments with trusted code.
-    Proper sandboxing is required for untrusted code execution.
-    """
-    def __init__(self, timeout_seconds=5):
-        self.timeout_seconds = timeout_seconds # Placeholder, actual timeout not implemented here
+# --- Secure Code Execution Target Function (for multiprocessing) ---
+def _execute_restricted_code_target(code_string: str, tests_string: str, result_queue: multiprocessing.Queue):
+    restricted_globals = dict(safe_globals)
+    restricted_globals['_print_'] = PrintCollector # Capture print statements
+    restricted_globals['_getattr_'] = getattr # Standard getattr, can be replaced with safer_getattr if needed
+    restricted_globals['_getitem_'] = lambda obj, index: obj[index] # Basic item access guard
+    restricted_globals['_write_'] = lambda x: x # Basic write guard, allows writing to attributes of objects created within restricted code
+    # For more security, one might implement or use more sophisticated guards like full_write_guard,
+    # but that can also break legitimate code that modifies objects.
 
-    def execute(self, generated_code_str: str, unit_tests_str: str):
-        """
-        Executes the generated_code_str with unit_tests_str in a restricted environment.
-        Returns a dictionary with 'passed' (bool) and 'output' (str).
-        """
-        # This is a very basic and unsafe way to execute code.
-        # A real sandbox would involve Docker, seccomp, separate processes, etc.
-        
-        full_code_to_execute = f"{generated_code_str}\n\n{unit_tests_str}"
-        
-        # Capture stdout/stderr
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
-        redirected_stdout = StringIO()
-        redirected_stderr = StringIO()
-        sys.stdout = redirected_stdout
-        sys.stderr = redirected_stderr
+    # Minimal set of builtins often needed
+    restricted_globals['__builtins__']['AssertionError'] = AssertionError
+    restricted_globals['__builtins__']['Exception'] = Exception
+    restricted_globals['__builtins__']['True'] = True
+    restricted_globals['__builtins__']['False'] = False
+    restricted_globals['__builtins__']['None'] = None
+    restricted_globals['__builtins__']['len'] = len
+    restricted_globals['__builtins__']['list'] = list
+    restricted_globals['__builtins__']['dict'] = dict
+    restricted_globals['__builtins__']['str'] = str
+    restricted_globals['__builtins__']['int'] = int
+    restricted_globals['__builtins__']['float'] = float
+    restricted_globals['__builtins__']['range'] = range
+    # Add other safe builtins as necessary for common operations
 
-        results = {"passed": False, "output": "", "error": ""}
+    results = {"passed": False, "log": "", "stdout": "", "stderr": ""}
+    
+    # Capture stdout/stderr within the subprocess for exec, though RestrictedPython's _print_ handles prints
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    redirected_stdout_exec = StringIO()
+    redirected_stderr_exec = StringIO()
+    # Note: RestrictedPython's PrintCollector is the primary way to get 'print' output.
+    # Redirecting sys.stdout/stderr here is more for completeness or if some part of the
+    # executed code bypasses PrintCollector (less likely with compiled_restricted code).
+
+    try:
+        sys.stdout = redirected_stdout_exec
+        sys.stderr = redirected_stderr_exec
+
+        byte_code = compile_restricted(code_string, filename='<ai_generated_code>', mode='exec')
+        test_byte_code = compile_restricted(tests_string, filename='<test_code>', mode='exec')
         
+        local_scope = {} # Execution scope for the generated code and tests
+        exec(byte_code, restricted_globals, local_scope)
+        exec(test_byte_code, restricted_globals, local_scope)
+
+        results["passed"] = True
+        results["log"] = "Execution completed. All assertions passed (if any within tests_string)."
+
+    except AssertionError as e:
+        results["passed"] = False
+        results["log"] = f"AssertionError: {e}"
+        results["stderr"] = traceback.format_exc() # Store traceback in stderr field
+    except Exception as e:
+        results["passed"] = False
+        results["log"] = f"Execution error: {type(e).__name__}: {e}"
+        results["stderr"] = traceback.format_exc() # Store traceback in stderr field
+    finally:
+        sys.stdout = old_stdout # Restore original stdout/stderr
+        sys.stderr = old_stderr
+        
+        results["stdout"] = restricted_globals['_print_'].collected_output() + redirected_stdout_exec.getvalue()
+        # If stderr has content from redirection (e.g. from C extensions, or unhandled Python errors not caught by PrintCollector)
+        err_val = redirected_stderr_exec.getvalue()
+        if err_val:
+             results["stderr"] = results.get("stderr","") + "\n--- Raw Stderr Capture ---\n" + err_val
+
+        redirected_stdout_exec.close()
+        redirected_stderr_exec.close()
+        result_queue.put(results)
+
+# --- Secure Executor Class ---
+class SecureExecutor:
+    def __init__(self, timeout_seconds=10): # Increased default timeout
+        self.timeout_seconds = timeout_seconds
+
+    def execute(self, code_string, tests_string):
+        result_queue = multiprocessing.Queue()
+        # Ensure 'spawn' start method for better cross-platform compatibility if issues arise with 'fork'
+        # On Linux, 'fork' is default and usually fine. On Windows/macOS, 'spawn' is default.
+        # ctx = multiprocessing.get_context('spawn') 
+        # process = ctx.Process(...)
+        process = multiprocessing.Process(
+            target=_execute_restricted_code_target,
+            args=(code_string, tests_string, result_queue)
+        )
+
+        process.start()
+        process.join(timeout=self.timeout_seconds)
+
+        if process.is_alive():
+            print(f"Process {process.pid} timed out after {self.timeout_seconds}s. Terminating.")
+            process.terminate()
+            process.join(timeout=1) # Give it a moment to terminate
+            if process.is_alive(): # If still alive
+                print(f"Process {process.pid} did not terminate gracefully. Killing.")
+                process.kill() # Force kill
+                process.join()
+            return False, "Execution timed out.", "", "Timeout Error: Process terminated."
+
         try:
-            # Create a somewhat restricted global scope
-            restricted_globals = {"__builtins__": {"print": print, "range": range, "len": len, "list": list, "dict": dict, "str": str, "int": int, "float": float, "bool": bool, "AssertionError": AssertionError, "Exception": Exception, "True": True, "False": False, "None": None}}
-            # For pytest-like tests, we might need to provide 'assert' or use a test runner.
-            # This simple exec won't run pytest-style tests directly.
-            # Assuming unit_tests_str uses basic assert statements for now.
-            
-            exec(full_code_to_execute, restricted_globals)
-            results["passed"] = True # If exec completes without unhandled exception
-            results["output"] = "Execution completed. All asserts passed (if any)."
-            # Note: This doesn't capture assert failures directly unless they raise an unhandled exception.
-            # A proper test runner would be needed for granular test results.
-
-        except AssertionError as e:
-            results["passed"] = False
-            results["output"] = f"AssertionError: {e}"
-            results["error"] = traceback.format_exc()
+            # Timeout for queue.get to prevent hanging if subprocess dies unexpectedly after join
+            results = result_queue.get(timeout=2) 
+            return results["passed"], results["log"], results["stdout"], results.get("stderr", "")
+        except multiprocessing.queues.Empty: # Using specific exception for queue empty
+             # This can happen if the process terminated due to external reasons (OOM) or internal unhandled exit
+            exit_code = process.exitcode
+            log_message = f"Execution process {process.pid} ended unexpectedly (exit code: {exit_code}) without returning results via queue."
+            print(log_message)
+            return False, log_message, "", f"Process Error (exit code {exit_code})"
         except Exception as e:
-            results["passed"] = False # Any other exception means failure
-            results["output"] = f"Execution failed with error: {e}"
-            results["error"] = traceback.format_exc()
+            log_message = f"Failed to retrieve results from subprocess queue: {type(e).__name__}: {e}"
+            print(log_message)
+            return False, log_message, "", "Queue/Process Communication Error"
         finally:
-            # Restore stdout/stderr
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-            
-            # Append captured output
-            results["output"] += f"\n--- Captured STDOUT ---\n{redirected_stdout.getvalue()}"
-            captured_stderr = redirected_stderr.getvalue()
-            if captured_stderr:
-                results["output"] += f"\n--- Captured STDERR ---\n{captured_stderr}"
-            
-            redirected_stdout.close()
-            redirected_stderr.close()
+            result_queue.close()
+            # Waits for the queue's internal thread to finish. Important for clean exit.
+            result_queue.join_thread() 
 
-        return results
 
 # --- Text Metric Calculation ---
 def calculate_text_metrics(predictions: list[str], references: list[list[str]]):
-    """
-    Calculates BLEU and ROUGE scores.
-    predictions: A list of generated strings.
-    references: A list of lists of reference strings.
-    """
     results = {}
     try:
         sacrebleu_metric = load_metric("sacrebleu")
         rouge_metric = load_metric("rouge")
-
-        # SacreBLEU expects references as list of lists of strings
-        # ROUGE expects references as list of strings (taking the first reference if multiple)
-        
-        # Ensure predictions are strings
         str_predictions = [str(p) for p in predictions]
-
         sacrebleu_score = sacrebleu_metric.compute(predictions=str_predictions, references=references)
         results["sacrebleu"] = sacrebleu_score["score"]
-        
-        # For ROUGE, if multiple references, typically the first or best one is used.
-        # Here, we'll just use the first reference for simplicity.
-        rouge_references_flat = [ref[0] if ref else "" for ref in references] # Handle empty ref list
+        rouge_references_flat = [ref[0] if ref else "" for ref in references]
         rouge_score = rouge_metric.compute(predictions=str_predictions, references=rouge_references_flat)
-        
         results["rouge"] = {
             "rouge1": rouge_score["rouge1"].mid.fmeasure,
             "rouge2": rouge_score["rouge2"].mid.fmeasure,
@@ -118,26 +162,21 @@ def main():
     parser.add_argument("--model_checkpoint_path", type=str, required=True, help="Path to the model checkpoint (.pt file).")
     parser.add_argument("--eval_dataset_path", type=str, required=True, help="Path to the evaluation dataset (.jsonl file).")
     parser.add_argument("--output_dir", type=str, default="eval_results", help="Directory to save evaluation results.")
-    # parser.add_argument("--max_generation_length", type=int, default=512, help="Max tokens for generation.") # Placeholder
-    # parser.add_argument("--generation_temperature", type=float, default=0.7, help="Temperature for generation.") # Placeholder
-
+    parser.add_argument("--timeout_seconds", type=int, default=10, help="Timeout for code execution in seconds.")
 
     args = parser.parse_args()
-
     print(f"Starting evaluation with arguments: {args}")
-
     os.makedirs(args.output_dir, exist_ok=True)
 
     # --- Model Loading ---
     print(f"Loading model from checkpoint: {args.model_checkpoint_path}")
     try:
-        checkpoint = torch.load(args.model_checkpoint_path, map_location=torch.device('cpu')) # Load to CPU first
+        checkpoint = torch.load(args.model_checkpoint_path, map_location=torch.device('cpu'))
         ai_state = checkpoint.get('ai_state')
         if not ai_state:
             raise ValueError("Checkpoint does not contain 'ai_state'. Cannot determine model configuration.")
-
         model_config = {
-            "vocab_size": ai_state.get('vocab_size', 16000), # Default if not found
+            "vocab_size": ai_state.get('vocab_size', 16000),
             "n_layers": ai_state.get('n_layers', 2),
             "n_heads": ai_state.get('n_heads', 4),
             "hidden_size": ai_state.get('hidden_size', 256),
@@ -148,22 +187,20 @@ def main():
         print(f"Instantiating PythonMasterAI with configuration: {model_config}")
         model = PythonMasterAI(**model_config)
         model.load_state_dict(checkpoint['model_state_dict'])
-        model.eval() # Set model to evaluation mode
-        # model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu")) # Move to device if needed
+        model.eval()
         print(f"Model loaded successfully. Device: {model.device}")
         model_config_id = ai_state.get('configuration_id', "unknown_config")
         model_stage_loaded = ai_state.get('stage', "unknown_stage")
-
     except Exception as e:
         print(f"Error loading model: {e}\n{traceback.format_exc()}")
         sys.exit(1)
 
     # --- Evaluation ---
     all_results = []
-    code_gen_results = {"total": 0, "passed": 0, "details": []}
-    text_gen_metrics = {"sacrebleu": [], "rouge1": [], "rouge2": [], "rougeL": []}
+    code_gen_results_summary = {"total": 0, "passed": 0} # Simplified summary
+    text_gen_metrics_agg = {"sacrebleu": [], "rouge1": [], "rouge2": [], "rougeL": []}
     
-    restricted_executor = UnsafeRestrictedExec()
+    secure_executor = SecureExecutor(timeout_seconds=args.timeout_seconds)
 
     print(f"Processing evaluation dataset: {args.eval_dataset_path}")
     try:
@@ -190,54 +227,50 @@ def main():
                 generated_output = model.generate_for_evaluation(
                     prompt_text=prompt,
                     task_type=task_type,
-                    context_code=context_code
-                    # max_length=args.max_generation_length, # Add if using these
-                    # temperature=args.generation_temperature
+                    context_code=context_code,
+                    max_gen_length=512 # Default max_gen_length for evaluation
                 )
                 
-                task_result = {"task_id": task_id, "task_type": task_type, "prompt": prompt, "generated_output": generated_output}
+                task_result_detail = {"task_id": task_id, "task_type": task_type, "prompt": prompt, "generated_output": generated_output}
 
                 if task_type == "code_generation":
                     unit_tests_str = task_data.get("unit_tests", "")
                     if not unit_tests_str:
                         print(f"  Warning: No unit tests provided for code_generation task {task_id}.")
-                        task_result.update({"status": "no_tests", "passed": False, "execution_output": "No unit tests provided."})
+                        task_result_detail.update({"status": "no_tests", "passed": False, "execution_log": "No unit tests provided."})
                     else:
-                        exec_result = restricted_executor.execute(generated_output, unit_tests_str)
-                        task_result.update({
+                        passed, log, stdout_capture, stderr_capture = secure_executor.execute(generated_output, unit_tests_str)
+                        task_result_detail.update({
                             "status": "executed",
-                            "passed": exec_result["passed"],
-                            "execution_output": exec_result["output"],
-                            "execution_error": exec_result.get("error", "")
+                            "passed": passed,
+                            "execution_log": log,
+                            "execution_stdout": stdout_capture,
+                            "execution_stderr": stderr_capture
                         })
-                        code_gen_results["total"] += 1
-                        if exec_result["passed"]:
-                            code_gen_results["passed"] += 1
-                    code_gen_results["details"].append(task_result) # Store detailed result for this task
-
+                        code_gen_results_summary["total"] += 1
+                        if passed:
+                            code_gen_results_summary["passed"] += 1
+                
                 elif task_type in ["code_explanation", "docstring_generation", "concept_explanation"]:
                     reference_text_list = task_data.get("reference_text", [])
-                    if not isinstance(reference_text_list, list): # Ensure it's a list
+                    if not isinstance(reference_text_list, list): 
                         reference_text_list = [str(reference_text_list)] if reference_text_list else []
-                    
-                    # For sacrebleu, references should be a list of lists of strings
                     sacrebleu_references = [[ref] for ref in reference_text_list]
-
                     if not reference_text_list:
                         print(f"  Warning: No reference text provided for task {task_id}. Metrics will be 0.")
-                        task_result.update({"sacrebleu": 0.0, "rouge": {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}})
+                        task_result_detail.update({"sacrebleu": 0.0, "rouge": {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}})
                     else:
                         metrics = calculate_text_metrics(predictions=[generated_output], references=sacrebleu_references)
-                        task_result.update(metrics)
-                        text_gen_metrics["sacrebleu"].append(metrics["sacrebleu"])
-                        text_gen_metrics["rouge1"].append(metrics["rouge"]["rouge1"])
-                        text_gen_metrics["rouge2"].append(metrics["rouge"]["rouge2"])
-                        text_gen_metrics["rougeL"].append(metrics["rouge"]["rougeL"])
+                        task_result_detail.update(metrics)
+                        text_gen_metrics_agg["sacrebleu"].append(metrics["sacrebleu"])
+                        text_gen_metrics_agg["rouge1"].append(metrics["rouge"]["rouge1"])
+                        text_gen_metrics_agg["rouge2"].append(metrics["rouge"]["rouge2"])
+                        text_gen_metrics_agg["rougeL"].append(metrics["rouge"]["rougeL"])
                 else:
                     print(f"  Warning: Unknown task_type '{task_type}' for task {task_id}. No specific evaluation performed.")
-                    task_result["status"] = "unknown_task_type"
+                    task_result_detail["status"] = "unknown_task_type"
                 
-                all_results.append(task_result)
+                all_results.append(task_result_detail)
     except FileNotFoundError:
         print(f"Error: Evaluation dataset not found at {args.eval_dataset_path}")
         sys.exit(1)
@@ -254,23 +287,22 @@ def main():
         "total_tasks_processed": len(all_results),
     }
 
-    if code_gen_results["total"] > 0:
-        pass_rate = (code_gen_results["passed"] / code_gen_results["total"]) * 100 if code_gen_results["total"] > 0 else 0
+    if code_gen_results_summary["total"] > 0:
+        pass_rate = (code_gen_results_summary["passed"] / code_gen_results_summary["total"]) * 100
         summary["code_generation"] = {
-            "total": code_gen_results["total"],
-            "passed": code_gen_results["passed"],
+            "total": code_gen_results_summary["total"],
+            "passed": code_gen_results_summary["passed"],
             "pass_rate_percentage": round(pass_rate, 2)
         }
     
-    if text_gen_metrics["sacrebleu"]: # If any text tasks were processed
+    if text_gen_metrics_agg["sacrebleu"]:
         summary["text_generation_avg_metrics"] = {
-            "avg_sacrebleu": round(sum(text_gen_metrics["sacrebleu"]) / len(text_gen_metrics["sacrebleu"]), 4) if text_gen_metrics["sacrebleu"] else 0.0,
-            "avg_rouge1": round(sum(text_gen_metrics["rouge1"]) / len(text_gen_metrics["rouge1"]), 4) if text_gen_metrics["rouge1"] else 0.0,
-            "avg_rouge2": round(sum(text_gen_metrics["rouge2"]) / len(text_gen_metrics["rouge2"]), 4) if text_gen_metrics["rouge2"] else 0.0,
-            "avg_rougeL": round(sum(text_gen_metrics["rougeL"]) / len(text_gen_metrics["rougeL"]), 4) if text_gen_metrics["rougeL"] else 0.0,
+            "avg_sacrebleu": round(sum(text_gen_metrics_agg["sacrebleu"]) / len(text_gen_metrics_agg["sacrebleu"]), 4),
+            "avg_rouge1": round(sum(text_gen_metrics_agg["rouge1"]) / len(text_gen_metrics_agg["rouge1"]), 4),
+            "avg_rouge2": round(sum(text_gen_metrics_agg["rouge2"]) / len(text_gen_metrics_agg["rouge2"]), 4),
+            "avg_rougeL": round(sum(text_gen_metrics_agg["rougeL"]) / len(text_gen_metrics_agg["rougeL"]), 4),
         }
 
-    # --- Output Files ---
     results_filename_base = f"eval_results_{model_config_id}_{model_stage_loaded}"
     detailed_results_path = os.path.join(args.output_dir, f"{results_filename_base}.jsonl")
     summary_results_path = os.path.join(args.output_dir, f"eval_summary_{model_config_id}_{model_stage_loaded}.json")
@@ -294,6 +326,7 @@ def main():
     print(json.dumps(summary, indent=4))
     print("Evaluation finished.")
 
-
 if __name__ == "__main__":
+    # This is important for multiprocessing to work correctly on some platforms (like Windows)
+    multiprocessing.freeze_support() 
     main()
