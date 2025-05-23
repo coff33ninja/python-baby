@@ -61,13 +61,21 @@ def train(stage: str):
     if final_sources_to_scrape:
         print(f"Consolidated scraping for stage '{stage}': {final_sources_to_scrape} with URLs: {final_urls_to_scrape}")
         scrape_data(stage, final_sources_to_scrape, final_urls_to_scrape)
-        # After ALL scraping is done, process the data relevant to research
-        model.process_scraped_research_data(stage)
+        # Previously, process_scraped_research_data was only called if new scraping occurred.
+
+    # Always attempt to process research data.
+    # The method `process_scraped_research_data` will check internally if there are
+    # active research queries (knowledge gaps) to address.
+    # This ensures that even if no new scraping happened in this run,
+    # existing data can be used to try and resolve pending knowledge gaps.
+    print(f"Attempting to process research data for stage '{stage}' using existing/newly scraped files.")
+    model.process_scraped_research_data(stage)
 
     # Load the 'train' split directly to get a datasets.Dataset object.
     # This makes the type clearer for Pylance and avoids indexing a potentially
     # misinterpreted DatasetDict (which Pylance thought was an IterableDataset).
     # datasets.Dataset is map-style by default when streaming=False (default).
+    print(f"Loading training dataset from data/{stage} for model training...")
     train_dataset = load_dataset("text", data_dir=f"data/{stage}", split="train")
 
     for epoch in range(5):
