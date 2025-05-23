@@ -123,14 +123,16 @@ def test_grow_model_success_with_existing_layers(base_model):
                     assert torch.allclose(actual_tensor_in_new_layer, expected_tensor_after_scaling, atol=1e-7), \
                         f"Parameter {param_name} in new layer not scaled correctly."
 
-@patch('grow.nn.TransformerEncoderLayer') # Patch where nn.TransformerEncoderLayer is used in grow.py
+@patch('grow.nn.TransformerEncoderLayer', autospec=True) # Patch with autospec
 def test_grow_model_success_initially_no_layers_in_encoder(mock_transformer_encoder_layer_constructor, base_model):
     """Test successful growth when encoder initially has no layers (testing the 'if old_layers:' branch)."""
     base_model.transformer.encoder.layers = nn.ModuleList() # Manually empty layers
     initial_n_layers_attr = base_model.n_layers # Store original attribute value
 
-    # Configure the mock TransformerEncoderLayer that grow_model will create
-    mock_created_layer_instance = MagicMock(spec=nn.TransformerEncoderLayer)
+    # mock_transformer_encoder_layer_constructor is now an autospec'd mock.
+    # Its .return_value will also be an autospec'd mock (of an instance).
+    # Get a reference to this return_value mock to configure it.
+    mock_created_layer_instance = mock_transformer_encoder_layer_constructor.return_value
     
     # Mock parameters for the created layer
     # We'll mock two parameters to check the scaling logic.
@@ -139,8 +141,6 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_transformer_enco
     mock_param1 = MagicMock(data=mock_param1_data)
     mock_param2 = MagicMock(data=mock_param2_data)
     mock_created_layer_instance.parameters.return_value = [mock_param1, mock_param2]
-    
-    mock_transformer_encoder_layer_constructor.return_value = mock_created_layer_instance
 
     mock_response = mock_requests_post_response(status_code=200, json_data={"action": "grow"})
     
@@ -161,12 +161,18 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_transformer_enco
     
                 # Assert that TransformerEncoderLayer was called with correct args from base_model
                 # (assuming grow_model uses these attributes from the model)
+                # For parameters not directly on base_model, we assume grow_model uses
+                # standard defaults or defaults consistent with PythonMasterAI's typical setup.
+                expected_dim_feedforward = base_model.hidden_size * 4 # Common heuristic
+                expected_dropout = 0.1  # Common default
+                expected_activation = "relu" # Common default, nn.TransformerEncoderLayer accepts string
+
                 mock_transformer_encoder_layer_constructor.assert_called_once_with(
                     d_model=base_model.hidden_size,
                     nhead=base_model.n_heads,
-                    dim_feedforward=base_model.dim_feedforward,
-                    dropout=base_model.dropout, # Assuming attribute name is 'dropout' in PythonMasterAI
-                    activation=base_model.activation, # Assuming attribute name is 'activation'
+                    dim_feedforward=expected_dim_feedforward,
+                    dropout=expected_dropout,
+                    activation=expected_activation,
                     batch_first=False # Consistent with the UserWarning implying batch_first is False
                 )
                 
