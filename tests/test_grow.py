@@ -202,6 +202,7 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_transformer_enco
                     batch_first=True # Asserting that grow_model now passes this
                 )
                 
-                # Assert that the parameters of the (mocked) new layer are accessed (e.g., by the optimizer)
-                # Scaling by mul_(0.1) is not expected here as there's no prior layer to scale from.
-                mock_parameters_method.assert_called_once()
+                # In this path (no initial layers), the new layer's parameters are not directly iterated by grow_model
+                # for scaling (as there's no prior layer). They are included in model.parameters() for
+                # optimizer and total count, but not via a direct call to new_layer.parameters().
+                mock_parameters_method.assert_not_called()
