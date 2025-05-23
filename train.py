@@ -1,12 +1,13 @@
 # train.py
 from torch.optim import Adam
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset as TorchDataset # Added TorchDataset
 import torch.nn as nn
 from python_master_ai import PythonMasterAI
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from scrape_data import scrape_data
 import pytest
+from typing import cast # Added cast
 
 model = PythonMasterAI()
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -53,9 +54,19 @@ def train(stage="baby"):
         # After ALL scraping is done, process the data relevant to research
         model.process_scraped_research_data(stage)
 
-    dataset = load_dataset("text", data_dir=f"data/{stage}")
+    # Load the 'train' split directly to get a datasets.Dataset object.
+    # This makes the type clearer for Pylance and avoids indexing a potentially
+    # misinterpreted DatasetDict (which Pylance thought was an IterableDataset).
+    # datasets.Dataset is map-style by default when streaming=False (default).
+    train_dataset = load_dataset("text", data_dir=f"data/{stage}", split="train")
+
     for epoch in range(5):
-        for batch in DataLoader(dataset["train"], batch_size=4):
+        # datasets.Dataset is compatible with torch.utils.data.DataLoader.
+        # We use typing.cast to inform Pylance of this compatibility if it struggles
+        # to recognize it directly, addressing the reportArgumentType issue.
+        for batch in DataLoader(
+            cast(TorchDataset, train_dataset), batch_size=4
+        ):  # Use the extracted train_dataset
             inputs = tokenizer(
                 batch["text"], return_tensors="pt", padding=True, truncation=True
             )
