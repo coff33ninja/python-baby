@@ -87,6 +87,7 @@ class PythonMasterAI(nn.Module):
         self.performance_log.append((metric, value))
         with open("performance_log.json", "a") as f:
             json.dump({"metric": metric, "value": value}, f)
+            f.write("\n") # Ensure each JSON object is on a new line
 
     def log_research(self, topic, sources, success, note=""):
         log_entry = {"topic": topic, "sources": sources, "success": success}
@@ -95,11 +96,13 @@ class PythonMasterAI(nn.Module):
         self.research_log.append(log_entry)
         with open("research_log.json", "a") as f:
             json.dump(log_entry, f)
+            f.write("\n") # Ensure each JSON object is on a new line
 
     def log_source(self, source, url, score, added):
         self.source_log.append({"source": source, "url": url, "score": score, "added": added})
         with open("source_log.json", "a") as f:
             json.dump({"source": source, "url": url, "score": score, "added": added}, f)
+            f.write("\n") # Ensure each JSON object is on a new line
 
     def load_known_sources(self):
         return {
