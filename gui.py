@@ -23,9 +23,10 @@ def trigger_research():
 
 def discover_sources():
     new_sources = model.discover_new_sources()
+    discovered_message = f"Discovered sources in this run: {new_sources}\n\n" if new_sources else "No new sources discovered in this run.\n\n"
     with open("source_log.json", "r") as f:
         logs = [json.loads(line) for line in f]
-    return json.dumps(logs[-5:], indent=2)
+    return discovered_message + "Last 5 source log entries:\n" + json.dumps(logs[-5:], indent=2)
 
 
 def get_status():
@@ -33,6 +34,7 @@ def get_status():
 
 
 def approve_growth(user_key):
+    global model # Declare intent to use the global 'model' variable
     if user_key != MASTER_KEY:
         return "Invalid Master key"
     model, _ = grow_model(model)
