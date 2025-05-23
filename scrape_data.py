@@ -4,6 +4,15 @@ import scrapy
 from scrapy.crawler import CrawlerProcess
 import os
 import time
+import logging
+
+# To reduce verbosity from repeated Scrapy setup logs for each spider,
+# you can set the log level for specific Scrapy components to WARNING.
+# This should be done before CrawlerProcess is instantiated.
+logging.getLogger('scrapy.addons').setLevel(logging.WARNING)
+logging.getLogger('scrapy.extensions.telnet').setLevel(logging.WARNING)
+# The 'scrapy.middleware' logger is responsible for "Enabled extensions/middlewares/pipelines" logs.
+logging.getLogger('scrapy.middleware').setLevel(logging.WARNING)
 
 class PythonSpider(scrapy.Spider):
     name = "python_spider"
