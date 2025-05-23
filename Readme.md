@@ -3,7 +3,7 @@ Setup Instructions
     Environment (run in a virtual environment for safety):
     bash
 
-pip install torch transformers datasets fastapi uvicorn requests scrapy-playwright pytest gradio
+pip install torch transformers datasets fastapi uvicorn requests scrapy-playwright pytest gradio PyPDF2
 playwright install
 Dataset:
 

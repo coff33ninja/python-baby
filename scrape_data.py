@@ -4,6 +4,38 @@ import scrapy
 from scrapy.crawler import CrawlerProcess
 import os
 import time
+import logging
+
+# To reduce verbosity from repeated Scrapy setup logs for each spider,
+# you can set the log level for specific Scrapy components to WARNING.
+# This should be done before CrawlerProcess is instantiated.
+logging.getLogger('scrapy.addons').setLevel(logging.WARNING)
+logging.getLogger('scrapy.extensions.telnet').setLevel(logging.WARNING)
+# The 'scrapy.middleware' logger is responsible for "Enabled extensions/middlewares/pipelines" logs.
+logging.getLogger('scrapy.middleware').setLevel(logging.WARNING)
+
+class SaveToFilePipeline:
+    def process_item(self, item, spider):
+        file_path = item.get('file')
+        content = item.get('content')
+
+        if not file_path:
+            spider.logger.warning(f"Missing 'file' key in item from {spider.name} for source {item.get('source', 'unknown')}. Item will not be saved by this pipeline. Item: {item}")
+            return item
+        if content is None: # Allow empty string for content
+            spider.logger.warning(f"Missing 'content' in item for {file_path}. Item: {item}")
+            # Decide if to save an empty file or drop. For now, let's save to indicate an attempt.
+            content = "" # Or: from scrapy.exceptions import DropItem; raise DropItem(...)
+
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        try:
+            with open(file_path, "a", encoding="utf-8") as f:
+                f.write(content + "\n")
+            spider.logger.debug(f"Appended content to {file_path} for source {item.get('source')}")
+        except Exception as e:
+            spider.logger.error(f"Error writing to file {file_path}: {e}", exc_info=True)
+        return item
 
 class PythonSpider(scrapy.Spider):
     name = "python_spider"
@@ -15,12 +47,18 @@ class PythonSpider(scrapy.Spider):
         self.start_urls = [url] if url else []
         self.use_playwright = kwargs.pop('use_playwright', False)
 
-    async def start(self):
+    async def start_requests(self): # Renamed from 'start' to be Scrapy-compliant
+        if not self.start_urls:
+            self.logger.info(f"No start_urls defined for source {self.source}, spider will not make requests.")
+            return
+
         for url in self.start_urls:
+            meta = {}
             if self.use_playwright:
-                yield scrapy.Request(url, meta={'playwright': True, 'playwright_include_page': False}, callback=self.parse)
-            else:
-                yield scrapy.Request(url, callback=self.parse)
+                self.logger.info(f"Using Playwright for URL: {url}")
+                meta['playwright'] = True
+                meta['playwright_include_page'] = False # Default, can be omitted
+            yield scrapy.Request(url, callback=self.parse, meta=meta)
 
     def parse(self, response):
         os.makedirs(f"data/{self.stage}", exist_ok=True)
@@ -109,6 +147,9 @@ def scrape_data(stage, sources, source_urls):
             "timeout": 30 * 1000,  # 30 seconds for browser launch
         },
         "LOG_LEVEL": "INFO", # Adjust as needed, DEBUG for more verbosity
+        "ITEM_PIPELINES": {
+            'scrape_data.SaveToFilePipeline': 300,
+        },
     }
     process = CrawlerProcess(settings=settings)
 
@@ -122,7 +163,13 @@ def scrape_data(stage, sources, source_urls):
                 process.crawl(PythonSpider, source=source, url=url, stage=stage, use_playwright=use_playwright_for_source)
             except Exception as e:
                 print(f"Error scheduling scrape for {source}: {e}")
-    process.start() # Start the process after all spiders are scheduled
+    
+    print(f"Starting Scrapy crawl process for stage '{stage}'...")
+    crawl_start_time = time.time()
+    process.start(install_signal_handlers=False) # Start the process after all spiders are scheduled
+    crawl_end_time = time.time()
+    print(f"Scrapy crawl process for stage '{stage}' finished in {crawl_end_time - crawl_start_time:.2f} seconds.")
+
     if "pypi_docs" in sources:
         packages = (
             ["math", "os"] if stage in ["baby", "toddler"] else ["pandas", "polars"]
@@ -134,11 +181,29 @@ def scrape_data(stage, sources, source_urls):
 
 
 if __name__ == "__main__":
-    scrape_data(
-        "baby",
-        ["github_beginner", "study_guides"],
-        [
-            "https://api.github.com/search/repositories?q=language:python+stars:>100",
-            "https://automatetheboringstuff.com/2e/chapter0/",
-        ],
-    )
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python scrape_data.py <stage> [source1 url1 source2 url2 ...]")
+        print("Example: python scrape_data.py baby github_beginner https://api.github.com/search/repositories?q=language:python+stars:>100 study_guides https://automatetheboringstuff.com/2e/chapter0/")
+        sys.exit(1)
+    
+    stage_arg = sys.argv[1]
+    source_url_pairs = sys.argv[2:]
+    
+    if len(source_url_pairs) % 2 != 0:
+        print("Error: Sources and URLs must be provided in pairs.")
+        sys.exit(1)
+        
+    sources_arg = [source_url_pairs[i] for i in range(0, len(source_url_pairs), 2)]
+    urls_arg = [source_url_pairs[i] for i in range(1, len(source_url_pairs), 2)]
+    
+    if not sources_arg:
+        print(f"No specific sources/URLs provided for stage '{stage_arg}'. Exiting.")
+        # You could add default scraping tasks here if desired, e.g.:
+        # default_sources = ["github_beginner"]
+        # default_urls = ["https://api.github.com/search/repositories?q=language:python+stars:>100"]
+        # print(f"Running with default sources for stage '{stage_arg}': {default_sources}")
+        # scrape_data(stage_arg, default_sources, default_urls)
+    else:
+        print(f"Starting scrape_data script for stage: {stage_arg}, sources: {sources_arg}")
+        scrape_data(stage_arg, sources_arg, urls_arg)
