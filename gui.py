@@ -3,6 +3,7 @@ import gradio as gr
 from python_master_ai import PythonMasterAI
 import json
 from grow import grow_model
+import os # Added for path operations
 
 model = PythonMasterAI()
 MASTER_KEY = PythonMasterAI.MASTER_KEY
@@ -40,6 +41,39 @@ def approve_growth(user_key):
     model, _ = grow_model(model)
     return f"{model.stage.capitalize()} growth approved!"
 
+def handle_manual_upload(files, target_stage, user_key):
+    if user_key != MASTER_KEY:
+        return "Invalid Master key"
+    if not files:
+        return "No files were uploaded."
+    if not target_stage:
+        return "Please select a target stage for the data."
+
+    data_dir = f"data/{target_stage}"
+    os.makedirs(data_dir, exist_ok=True)
+
+    results = []
+    for uploaded_file in files:
+        try:
+            # uploaded_file.name is the path to the temporary file
+            # uploaded_file.orig_name is the original name of the file
+            original_filename = os.path.basename(uploaded_file.orig_name)
+            # Sanitize filename slightly, replace spaces, ensure .txt extension
+            safe_basename = "".join(c if c.isalnum() or c in ('.', '_') else '_' for c in original_filename)
+            if not safe_basename.lower().endswith(".txt"):
+                safe_basename_stem = os.path.splitext(safe_basename)[0]
+                save_filename = f"manual_upload_{safe_basename_stem}.txt"
+            else:
+                save_filename = f"manual_upload_{safe_basename}"
+            
+            save_path = os.path.join(data_dir, save_filename)
+            with open(uploaded_file.name, "r", encoding="utf-8") as f_in, \
+                 open(save_path, "w", encoding="utf-8") as f_out:
+                f_out.write(f_in.read())
+            results.append(f"Successfully saved '{original_filename}' as '{save_filename}' in '{data_dir}'")
+        except Exception as e:
+            results.append(f"Failed to save '{uploaded_file.orig_name}': {e}")
+    return "\n".join(results)
 
 with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
     gr.Markdown("## PythonMasterAI Control Panel")
@@ -72,5 +106,20 @@ with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
         growth_button.click(
             approve_growth, inputs=growth_key_input, outputs=growth_output
         )
+    with gr.Tab("Manual Data Upload"):
+        gr.Markdown("Upload text-based training documents (.txt, .py, .md, etc.). They will be saved as .txt files.")
+        upload_files = gr.File(label="Upload Training Files", file_count="multiple")
+        # Get stages from the model's definition
+        available_stages = list(model.define_growth_tasks().keys())
+        upload_stage_select = gr.Dropdown(choices=available_stages, label="Target Stage for Uploaded Data", value=model.stage)
+        upload_key_input = gr.Textbox(label="Master Key", type="password")
+        upload_button = gr.Button("Upload and Save Files")
+        upload_output = gr.Textbox(label="Upload Status", lines=5)
+        upload_button.click(
+            handle_manual_upload,
+            inputs=[upload_files, upload_stage_select, upload_key_input],
+            outputs=upload_output
+        )
+
 
 iface.launch()
