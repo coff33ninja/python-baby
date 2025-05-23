@@ -14,6 +14,29 @@ logging.getLogger('scrapy.extensions.telnet').setLevel(logging.WARNING)
 # The 'scrapy.middleware' logger is responsible for "Enabled extensions/middlewares/pipelines" logs.
 logging.getLogger('scrapy.middleware').setLevel(logging.WARNING)
 
+class SaveToFilePipeline:
+    def process_item(self, item, spider):
+        file_path = item.get('file')
+        content = item.get('content')
+
+        if not file_path:
+            spider.logger.warning(f"Missing 'file' key in item from {spider.name} for source {item.get('source', 'unknown')}. Item will not be saved by this pipeline. Item: {item}")
+            return item
+        if content is None: # Allow empty string for content
+            spider.logger.warning(f"Missing 'content' in item for {file_path}. Item: {item}")
+            # Decide if to save an empty file or drop. For now, let's save to indicate an attempt.
+            content = "" # Or: from scrapy.exceptions import DropItem; raise DropItem(...)
+
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        try:
+            with open(file_path, "a", encoding="utf-8") as f:
+                f.write(content + "\n")
+            spider.logger.debug(f"Appended content to {file_path} for source {item.get('source')}")
+        except Exception as e:
+            spider.logger.error(f"Error writing to file {file_path}: {e}", exc_info=True)
+        return item
+
 class PythonSpider(scrapy.Spider):
     name = "python_spider"
 
@@ -24,12 +47,18 @@ class PythonSpider(scrapy.Spider):
         self.start_urls = [url] if url else []
         self.use_playwright = kwargs.pop('use_playwright', False)
 
-    async def start(self):
+    async def start_requests(self): # Renamed from 'start' to be Scrapy-compliant
+        if not self.start_urls:
+            self.logger.info(f"No start_urls defined for source {self.source}, spider will not make requests.")
+            return
+
         for url in self.start_urls:
+            meta = {}
             if self.use_playwright:
-                yield scrapy.Request(url, meta={'playwright': True, 'playwright_include_page': False}, callback=self.parse)
-            else:
-                yield scrapy.Request(url, callback=self.parse)
+                self.logger.info(f"Using Playwright for URL: {url}")
+                meta['playwright'] = True
+                meta['playwright_include_page'] = False # Default, can be omitted
+            yield scrapy.Request(url, callback=self.parse, meta=meta)
 
     def parse(self, response):
         os.makedirs(f"data/{self.stage}", exist_ok=True)
@@ -118,6 +147,9 @@ def scrape_data(stage, sources, source_urls):
             "timeout": 30 * 1000,  # 30 seconds for browser launch
         },
         "LOG_LEVEL": "INFO", # Adjust as needed, DEBUG for more verbosity
+        "ITEM_PIPELINES": {
+            'scrape_data.SaveToFilePipeline': 300,
+        },
     }
     process = CrawlerProcess(settings=settings)
 
