@@ -7,7 +7,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 from scrape_data import scrape_data
 import pytest
-from typing import cast # Added cast
+from typing import cast, DefaultDict # Added cast and DefaultDict
 
 model = PythonMasterAI()
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -21,7 +21,17 @@ def run_unit_tests(code):
     return result == 0
 
 
-def train(stage="baby"):
+def train(stage: str):
+    print(f"Train function initiated for stage: {stage}")
+
+    # Ensure the model instance used by this train function is aligned with the target stage
+    if model.stage != stage:
+        print(f"Updating model's current stage from '{model.stage}' to '{stage}' for this training run.")
+        model.stage = stage
+        # Reset progress for the new stage if it's being set explicitly for a training run
+        model.task_progress = DefaultDict(int)
+        model.knowledge_gaps = []
+
     scrape_targets_for_research = []
     if model.assess_performance()["needs_research"]:
         # Get research targets but don't scrape yet
@@ -86,4 +96,12 @@ def train(stage="baby"):
 
 
 if __name__ == "__main__":
-    train()
+    import argparse
+    parser = argparse.ArgumentParser(description="Train the PythonMasterAI model.")
+    parser.add_argument("--stage", type=str, default=model.stage, # Default to current model's initial stage
+                        choices=list(model.define_growth_tasks().keys()),
+                        help="The training stage.")
+    args = parser.parse_args()
+    
+    print(f"Starting training script for stage: {args.stage}")
+    train(stage=args.stage)

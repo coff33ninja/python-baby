@@ -4,6 +4,8 @@ from python_master_ai import PythonMasterAI
 import json
 from grow import grow_model
 import os # Added for path operations
+import subprocess
+import sys
 
 model = PythonMasterAI()
 MASTER_KEY = PythonMasterAI.MASTER_KEY
@@ -75,6 +77,54 @@ def handle_manual_upload(files, target_stage, user_key):
             results.append(f"Failed to save '{uploaded_file.orig_name}': {e}")
     return "\n".join(results)
 
+def run_script_in_background(command_list, user_key, script_name):
+    if user_key != MASTER_KEY:
+        return "Invalid Master key"
+    try:
+        print(f"Running command: {' '.join(command_list)}")
+        process = subprocess.run(command_list, capture_output=True, text=True, check=False, encoding='utf-8')
+        output = f"--- {script_name} STDOUT ---\n{process.stdout}\n"
+        if process.stderr:
+            output += f"--- {script_name} STDERR ---\n{process.stderr}\n"
+        
+        if process.returncode == 0:
+            return f"{script_name} completed successfully.\n{output}"
+        else:
+            return f"{script_name} failed with return code {process.returncode}.\n{output}"
+    except Exception as e:
+        return f"Failed to run {script_name}: {e}\nTraceback: {traceback.format_exc()}"
+
+def run_train_script_gui(stage, user_key):
+    if not stage:
+        return "Please select a stage for training."
+    command = [sys.executable, "train.py", "--stage", stage]
+    return run_script_in_background(command, user_key, "Training Script (train.py)")
+
+def run_scrape_data_script_gui(stage, sources_str, urls_str, user_key):
+    if not stage:
+        return "Please select a stage for scraping."
+    if not sources_str.strip() or not urls_str.strip():
+        return "Sources and URLs cannot be empty. Please provide at least one source and its corresponding URL."
+        
+    sources_list = [s.strip() for s in sources_str.split(',') if s.strip()]
+    urls_list = [u.strip() for u in urls_str.split(',') if u.strip()]
+
+    if not sources_list or not urls_list:
+        return "After stripping, sources or URLs list is empty. Please provide valid, comma-separated values."
+
+    if len(sources_list) != len(urls_list):
+        return f"Mismatch between number of sources ({len(sources_list)}) and URLs ({len(urls_list)}). Please provide one URL per source."
+
+    command = [sys.executable, "scrape_data.py", stage]
+    for source, url in zip(sources_list, urls_list):
+        command.append(source)
+        command.append(url)
+    
+    return run_script_in_background(command, user_key, "Scraping Script (scrape_data.py)")
+
+# Get stages from the model's definition for dropdowns
+available_stages = list(model.define_growth_tasks().keys())
+
 with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
     gr.Markdown("## PythonMasterAI Control Panel")
     with gr.Tab("Master Commands"):
@@ -109,8 +159,6 @@ with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
     with gr.Tab("Manual Data Upload"):
         gr.Markdown("Upload text-based training documents (.txt, .py, .md, etc.). They will be saved as .txt files.")
         upload_files = gr.File(label="Upload Training Files", file_count="multiple")
-        # Get stages from the model's definition
-        available_stages = list(model.define_growth_tasks().keys())
         upload_stage_select = gr.Dropdown(choices=available_stages, label="Target Stage for Uploaded Data", value=model.stage)
         upload_key_input = gr.Textbox(label="Master Key", type="password")
         upload_button = gr.Button("Upload and Save Files")
@@ -119,6 +167,30 @@ with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
             handle_manual_upload,
             inputs=[upload_files, upload_stage_select, upload_key_input],
             outputs=upload_output
+        )
+    with gr.Tab("Run Training Script"):
+        gr.Markdown("Run the `train.py` script. This will execute in a separate process.")
+        train_stage_select = gr.Dropdown(choices=available_stages, label="Select Stage for Training", value=model.stage)
+        train_key_input = gr.Textbox(label="Master Key", type="password")
+        train_run_button = gr.Button("Start Training Script")
+        train_run_output = gr.Textbox(label="Training Script Output", lines=10, interactive=False)
+        train_run_button.click(
+            run_train_script_gui,
+            inputs=[train_stage_select, train_key_input],
+            outputs=train_run_output
+        )
+    with gr.Tab("Run Scraper Script"):
+        gr.Markdown("Run the `scrape_data.py` script. This will execute in a separate process.")
+        scrape_stage_select = gr.Dropdown(choices=available_stages, label="Select Stage for Scraping", value=model.stage)
+        scrape_sources_input = gr.Textbox(label="Sources (comma-separated)", placeholder="e.g., github_beginner,study_guides")
+        scrape_urls_input = gr.Textbox(label="URLs (comma-separated, in same order as sources)", placeholder="e.g., http://url1.com,http://url2.com")
+        scrape_key_input = gr.Textbox(label="Master Key", type="password")
+        scrape_run_button = gr.Button("Start Scraper Script")
+        scrape_run_output = gr.Textbox(label="Scraper Script Output", lines=10, interactive=False)
+        scrape_run_button.click(
+            run_scrape_data_script_gui,
+            inputs=[scrape_stage_select, scrape_sources_input, scrape_urls_input, scrape_key_input],
+            outputs=scrape_run_output
         )
 
 

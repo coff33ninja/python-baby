@@ -181,11 +181,29 @@ def scrape_data(stage, sources, source_urls):
 
 
 if __name__ == "__main__":
-    scrape_data(
-        "baby",
-        ["github_beginner", "study_guides"],
-        [
-            "https://api.github.com/search/repositories?q=language:python+stars:>100",
-            "https://automatetheboringstuff.com/2e/chapter0/",
-        ],
-    )
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python scrape_data.py <stage> [source1 url1 source2 url2 ...]")
+        print("Example: python scrape_data.py baby github_beginner https://api.github.com/search/repositories?q=language:python+stars:>100 study_guides https://automatetheboringstuff.com/2e/chapter0/")
+        sys.exit(1)
+    
+    stage_arg = sys.argv[1]
+    source_url_pairs = sys.argv[2:]
+    
+    if len(source_url_pairs) % 2 != 0:
+        print("Error: Sources and URLs must be provided in pairs.")
+        sys.exit(1)
+        
+    sources_arg = [source_url_pairs[i] for i in range(0, len(source_url_pairs), 2)]
+    urls_arg = [source_url_pairs[i] for i in range(1, len(source_url_pairs), 2)]
+    
+    if not sources_arg:
+        print(f"No specific sources/URLs provided for stage '{stage_arg}'. Exiting.")
+        # You could add default scraping tasks here if desired, e.g.:
+        # default_sources = ["github_beginner"]
+        # default_urls = ["https://api.github.com/search/repositories?q=language:python+stars:>100"]
+        # print(f"Running with default sources for stage '{stage_arg}': {default_sources}")
+        # scrape_data(stage_arg, default_sources, default_urls)
+    else:
+        print(f"Starting scrape_data script for stage: {stage_arg}, sources: {sources_arg}")
+        scrape_data(stage_arg, sources_arg, urls_arg)
