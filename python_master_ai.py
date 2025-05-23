@@ -8,6 +8,9 @@ from collections import defaultdict
 from transformers import AutoTokenizer
 import ast
 import re
+import time
+from urllib.parse import urlparse
+from datetime import datetime
 import os
 
 class PythonMasterAI(nn.Module):
@@ -180,13 +183,78 @@ class PythonMasterAI(nn.Module):
                 queries.append(f"{gap} python ecosystem trends")
         return queries or ["python " + self.stage + " tutorial"]
 
+    def _fetch_github_repo_details(self, repo_url_or_api_url):
+        """
+        Fetches repository details from GitHub API.
+        Handles both web URLs (e.g., https://github.com/owner/repo)
+        and direct API URLs (e.g., https://api.github.com/repos/owner/repo).
+        """
+        parsed_url = urlparse(repo_url_or_api_url)
+        api_url_to_use = None
+
+        if parsed_url.netloc == "api.github.com" and parsed_url.path.startswith("/repos/"):
+            api_url_to_use = repo_url_or_api_url
+        elif parsed_url.netloc == "github.com":
+            path_parts = parsed_url.path.strip('/').split('/')
+            if len(path_parts) >= 2:
+                owner, repo_name_segment = path_parts[0], path_parts[1]
+                # Ensure repo name doesn't contain further slashes like branches/tags
+                repo_name = repo_name_segment.split('/')[0]
+                api_url_to_use = f"https://api.github.com/repos/{owner}/{repo_name}"
+
+        if not api_url_to_use:
+            # print(f"Debug: Could not determine GitHub API URL from: {repo_url_or_api_url}")
+            return None
+
+        try:
+            # Consider adding authentication (e.g., a GitHub token) for higher rate limits
+            # headers = {"Authorization": "token YOUR_GITHUB_TOKEN"}
+            response = requests.get(api_url_to_use, timeout=5) # Add headers=headers if using token
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            print(f"Warning: Error fetching GitHub repo details for {api_url_to_use}: {e}")
+            return None
+
+    def _fetch_pypi_package_info(self, package_name_or_url):
+        """
+        Fetches package information from PyPI JSON API.
+        Handles PyPI project URLs (e.g., https://pypi.org/project/requests)
+        or just package names (e.g., "requests").
+        """
+        package_name = ""
+        parsed_uri = urlparse(package_name_or_url)
+
+        if parsed_uri.netloc == "pypi.org":
+            path_segments = parsed_uri.path.strip('/').split('/')
+            if len(path_segments) > 1:
+                if path_segments[0] == "project":
+                    package_name = path_segments[1]
+                elif path_segments[0] == "pypi": # e.g. /pypi/<package_name>/json
+                    package_name = path_segments[1]
+        elif not parsed_uri.scheme and not parsed_uri.netloc: # Likely just a package name
+            package_name = package_name_or_url.strip()
+
+        if not package_name:
+            # print(f"Debug: Could not determine PyPI package name from: {package_name_or_url}")
+            return None
+
+        api_url = f"https://pypi.org/pypi/{package_name}/json"
+        try:
+            response = requests.get(api_url, timeout=5)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            print(f"Warning: Error fetching PyPI package info for {package_name}: {e}")
+            return None
+
     def select_research_sources(self, query):
         sources = list(self.known_sources.keys())
         if self.stage == "baby":
             return [s for s in sources if "beginner" in s or "study_guides" in s or "stackoverflow_basic" in s]
-        if self.stage == "toddler":
+        elif self.stage == "toddler":
             return [s for s in sources if "intermediate" in s or "pypi_docs" in s or "real_python" in s]
-        if self.stage == "teenager":
+        elif self.stage == "teenager":
             return [s for s in sources if "advanced" in s or "peps" in s or "reddit_learnpython" in s]
         return [s for s in sources if "trending" in s or "python_docs" in s]
 
@@ -341,12 +409,112 @@ class PythonMasterAI(nn.Module):
             candidates.append(("python_conference", "https://pycon.org"))
         return candidates
 
-    def evaluate_source(self, source, url, query):
-        # Score based on relevance, authority, freshness
-        relevance = 0.5 if query.lower() in source.lower() else 0.2
-        authority = 0.3  # Placeholder: Check stars, votes, or domain reputation
-        freshness = 0.2  # Placeholder: Check last update
-        return relevance + authority + freshness
+    def evaluate_source(self, source_name, url, query):
+        """
+        Evaluates a potential new source based on relevance, authority, and freshness.
+        Returns a score between 0.0 and 1.0.
+        """
+        relevance_score = 0.0
+        authority_score = 0.0
+        freshness_score = 0.0
+
+        # 1. Relevance Score (max 0.4)
+        query_lower = query.lower()
+        query_terms = query_lower.split()
+        relevance_points = 0
+        if any(term in source_name.lower() for term in query_terms):
+            relevance_points += 1
+        if any(term in url.lower() for term in query_terms):
+            relevance_points += 1
+        if "python" in source_name.lower() or "python" in url.lower():
+            relevance_points += 0.5 # Bonus for general Python keyword
+
+        relevance_score = min(relevance_points / 2.5, 1.0) * 0.4 if relevance_points > 0 else 0.05
+
+        # --- Fetch details once if applicable ---
+        parsed_url = urlparse(url)
+        domain = parsed_url.netloc.lower()
+        github_details = None
+        pypi_details = None
+
+        if "github.com" in domain or "api.github.com" in domain:
+            github_details = self._fetch_github_repo_details(url)
+        elif "pypi.org" in domain:
+            pypi_details = self._fetch_pypi_package_info(url)
+
+        # 2. Authority Score (max 0.3)
+        if github_details and 'stargazers_count' in github_details:
+            stars = github_details['stargazers_count']
+            if stars >= 1000:
+                authority_score = 0.3
+            elif stars >= 100:
+                authority_score = 0.2
+            else:
+                authority_score = 0.1
+        elif pypi_details and 'info' in pypi_details and 'version' in pypi_details['info']:
+            authority_score = 0.25 # PyPI packages are generally curated and versioned
+        elif "stackoverflow.com" in domain:
+            authority_score = 0.25
+        elif "docs.python.org" in domain or "peps.python.org" in domain:
+            authority_score = 0.3
+        elif any(known_good_domain in domain for known_good_domain in ["realpython.com", "djangoproject.com", "flask.palletsprojects.com"]):
+            authority_score = 0.25
+        else: # Default for unknown or less structured sources
+            authority_score = 0.1
+
+        # 3. Freshness Score (max 0.3)
+        current_time_ts = time.time()
+        # Default freshness, can be overridden by specific source logic
+        freshness_score = 0.05 # Default to not very fresh if no specific info
+
+        if github_details and 'pushed_at' in github_details:
+            last_push_date_str = github_details['pushed_at']
+            try:
+                last_push_dt = datetime.fromisoformat(last_push_date_str.replace('Z', '+00:00'))
+                last_push_ts = last_push_dt.timestamp()
+                age_days = (current_time_ts - last_push_ts) / (60 * 60 * 24)
+
+                if age_days <= 30:
+                    freshness_score = 0.3    # Updated in last month
+                elif age_days <= 180:
+                    freshness_score = 0.2  # Updated in last 6 months
+                elif age_days <= 365:
+                    freshness_score = 0.15 # Updated in last year
+                else:
+                    freshness_score = 0.05                 # Older than a year
+            except ValueError:
+                print(f"Warning: Could not parse GitHub date: {last_push_date_str}")
+        elif pypi_details and 'releases' in pypi_details and pypi_details['releases']:
+            latest_version_str = pypi_details.get('info', {}).get('version')
+            if latest_version_str and latest_version_str in pypi_details['releases']:
+                release_dates = [
+                    item['upload_time_iso_8601']
+                    for item in pypi_details['releases'][latest_version_str]
+                    if 'upload_time_iso_8601' in item
+                ]
+                if release_dates:
+                    # Take the most recent upload time for the latest version
+                    latest_upload_time_str = max(release_dates)
+                    try:
+                        upload_dt = datetime.fromisoformat(latest_upload_time_str.replace('Z', '+00:00'))
+                        upload_ts = upload_dt.timestamp()
+                        age_days = (current_time_ts - upload_ts) / (60 * 60 * 24)
+
+                        if age_days <= 90:
+                            freshness_score = 0.3   # Released in last 3 months
+                        elif age_days <= 365:
+                            freshness_score = 0.2 # Released in last year
+                        else:
+                            freshness_score = 0.1
+                    except ValueError:
+                        print(f"Warning: Could not parse PyPI date: {latest_upload_time_str}")
+        # For general websites, freshness is hard without scraping content for dates.
+        # Could try 'Last-Modified' HTTP header if fetching the page.
+
+        total_score = relevance_score + authority_score + freshness_score
+        # print(f"Debug: Evaluated '{source_name}' ({url}) for query '{query}': R={relevance_score:.2f}, A={authority_score:.2f}, F={freshness_score:.2f} -> Total={total_score:.2f}")
+        return min(total_score, 1.0) # Ensure score is capped at 1.0
+
 
     def prioritize_scraping(self):
         """Selects a list of source names to scrape based on the current stage."""
