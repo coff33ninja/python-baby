@@ -8,6 +8,15 @@ import subprocess
 import sys
 import traceback
 
+# Attempt to import PyPDF2 for PDF processing
+try:
+    from PyPDF2 import PdfReader
+    pdf_support_available = True
+except ImportError:
+    PdfReader = None # Define for type hinting and conditional checks
+    pdf_support_available = False
+    print("WARNING: PyPDF2 not installed. PDF upload support will be disabled. To enable, run: pip install PyPDF2")
+
 model = PythonMasterAI()
 MASTER_KEY = PythonMasterAI.MASTER_KEY
 
@@ -57,25 +66,59 @@ def handle_manual_upload(files, target_stage, user_key):
 
     results = []
     for uploaded_file in files:
-        try:
-            # uploaded_file.name is the path to the temporary file
-            # uploaded_file.orig_name is the original name of the file
-            original_filename = os.path.basename(uploaded_file.orig_name)
-            # Sanitize filename slightly, replace spaces, ensure .txt extension
-            safe_basename = "".join(c if c.isalnum() or c in ('.', '_') else '_' for c in original_filename)
-            if not safe_basename.lower().endswith(".txt"):
-                safe_basename_stem = os.path.splitext(safe_basename)[0]
-                save_filename = f"manual_upload_{safe_basename_stem}.txt"
+        # Assuming 'uploaded_file' is an object where:
+        # .name is the original filename
+        # str(uploaded_file) is the temporary file path
+        actual_original_filename = uploaded_file.name 
+        temp_file_path = str(uploaded_file)
+
+        original_filename_basename = os.path.basename(actual_original_filename)
+        content_to_save = None  # Initialize to None, indicating content not yet processed
+
+        # Generate a descriptive .txt filename based on the original
+        original_filename_stem, original_extension = os.path.splitext(original_filename_basename)
+        safe_stem = "".join(c if c.isalnum() or c == '_' else '_' for c in original_filename_stem)
+        safe_ext = "".join(c if c.isalnum() else '' for c in original_extension.replace('.', ''))
+
+        if safe_ext:
+            save_filename_base = f"manual_upload_{safe_stem}_{safe_ext}"
+        else:
+            save_filename_base = f"manual_upload_{safe_stem}"
+        save_filename = f"{save_filename_base}.txt"
+        save_path = os.path.join(data_dir, save_filename)
+
+        if original_filename_basename.lower().endswith(".pdf"):
+            if pdf_support_available and PdfReader is not None:
+                try:
+                    reader = PdfReader(temp_file_path)
+                    pdf_text_parts = [page.extract_text() or "" for page in reader.pages]
+                    content_to_save = "\n".join(pdf_text_parts).strip()
+                    if not content_to_save:
+                        results.append(f"Info: Extracted no text from PDF '{actual_original_filename}'. An empty .txt file will be saved.")
+                except Exception as pdf_e:
+                    results.append(f"Error parsing PDF '{actual_original_filename}': {pdf_e}. An empty .txt file will be saved if possible.")
+                    content_to_save = "" # Fallback to save an empty file
             else:
-                save_filename = f"manual_upload_{safe_basename}"
-            
-            save_path = os.path.join(data_dir, save_filename)
-            with open(uploaded_file.name, "r", encoding="utf-8") as f_in, \
-                 open(save_path, "w", encoding="utf-8") as f_out:
-                f_out.write(f_in.read())
-            results.append(f"Successfully saved '{original_filename}' as '{save_filename}' in '{data_dir}'")
-        except Exception as e:
-            results.append(f"Failed to save '{uploaded_file.orig_name}': {e}")
+                results.append(f"Info: PDF support not available (PyPDF2 not installed). Skipping PDF '{actual_original_filename}'.")
+                continue # Skip to the next file
+        else:  # Assume other files are text-based
+            try:
+                with open(temp_file_path, "r", encoding="utf-8", errors="ignore") as f_in:
+                    content_to_save = f_in.read()
+            except Exception as text_e:
+                results.append(f"Error reading text file '{actual_original_filename}': {text_e}. An empty .txt file will be saved if possible.")
+                content_to_save = "" # Fallback to save an empty file
+
+        # Proceed to save if content_to_save has been set (even if it's an empty string from an error)
+        if content_to_save is not None:
+            try:
+                with open(save_path, "w", encoding="utf-8") as f_out:
+                    f_out.write(content_to_save)
+                results.append(f"Processed '{actual_original_filename}' and saved as '{save_filename}'.")
+            except Exception as save_e:
+                results.append(f"Error saving content from '{actual_original_filename}' to '{save_filename}': {save_e}")
+        # If content_to_save is None, it means the file was skipped (e.g., PDF without PyPDF2), and a message was already added.
+
     return "\n".join(results)
 
 def run_script_in_background(command_list, user_key, script_name):
@@ -158,7 +201,7 @@ with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
             approve_growth, inputs=growth_key_input, outputs=growth_output
         )
     with gr.Tab("Manual Data Upload"):
-        gr.Markdown("Upload text-based training documents (.txt, .py, .md, etc.). They will be saved as .txt files.")
+        gr.Markdown("Upload training documents (e.g., .txt, .py, .md, .pdf). Content will be extracted and saved as .txt files.")
         upload_files = gr.File(label="Upload Training Files", file_count="multiple")
         upload_stage_select = gr.Dropdown(choices=available_stages, label="Target Stage for Uploaded Data", value=model.stage)
         upload_key_input = gr.Textbox(label="Master Key", type="password")
