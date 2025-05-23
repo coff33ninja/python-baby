@@ -6,6 +6,7 @@ from grow import grow_model
 import os # Added for path operations
 import subprocess
 import sys
+import traceback
 
 model = PythonMasterAI()
 MASTER_KEY = PythonMasterAI.MASTER_KEY
