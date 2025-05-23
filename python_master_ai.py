@@ -13,28 +13,60 @@ import os
 class PythonMasterAI(nn.Module):
     MASTER_KEY = "8f9b7f8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d"
 
-    def __init__(self, vocab_size=16000, n_layers=2, n_heads=4, hidden_size=256):
+    def __init__(self, vocab_size=16000, n_layers=2, n_heads=4, hidden_size=256,
+                 dropout=0.1, dim_feedforward=None, activation="relu"):
         super().__init__()
+        self.vocab_size = vocab_size # Store for reference
+        self.hidden_size = hidden_size
+        self.n_heads = n_heads
+        self.n_layers = n_layers # Initial number of layers
+        self.dropout = dropout
+        self.activation = activation
+        self.dim_feedforward = dim_feedforward if dim_feedforward is not None else hidden_size * 4
+
         self.embed = nn.Embedding(vocab_size, hidden_size)
+        # The nn.Transformer module will create TransformerEncoderLayers internally.
+        # We configure it to use batch_first=True and pass other relevant hyperparameters.
         self.transformer = nn.Transformer(
-            d_model=hidden_size, nhead=n_heads, num_encoder_layers=n_layers
+            d_model=self.hidden_size,
+            nhead=self.n_heads,
+            num_encoder_layers=self.n_layers,
+            num_decoder_layers=0,  # Explicitly setting to 0 for an encoder-only architecture
+            dim_feedforward=self.dim_feedforward,
+            dropout=self.dropout,
+            activation=self.activation,
+            batch_first=True  # Key change: ensures internal layers are batch_first
         )
         self.fc = nn.Linear(hidden_size, vocab_size)
+
         self.performance_log = []
         self.research_log = []
         self.source_log = []
         self.stage = "baby"
-        self.hidden_size = hidden_size
-        self.n_heads = n_heads
-        self.n_layers = n_layers
         self.growth_tasks = self.define_growth_tasks()
         self.task_progress = defaultdict(int)
         self.tokenizer = AutoTokenizer.from_pretrained("gpt2")  # Replace with custom
         self.knowledge_gaps = []
         self.known_sources = self.load_known_sources()
 
-    def forward(self, x):
-        return self.fc(self.transformer(self.embed(x), self.embed(x)))
+    def forward(self, x, src_key_padding_mask=None):
+        # Input x shape: (batch_size, seq_len)
+        # Embedding output shape: (batch_size, seq_len, hidden_size) due to batch_first=True
+        embedded_src = self.embed(x)
+
+        # Pass through the Transformer's encoder part
+        # Input shape: (batch_size, seq_len, hidden_size)
+        # Output shape: (batch_size, seq_len, hidden_size)
+        if self.n_layers > 0: # Only use transformer if layers exist
+            transformer_output = self.transformer.encoder(embedded_src, src_key_padding_mask=src_key_padding_mask)
+        else: # If no layers (e.g. n_layers=0 initially), bypass transformer encoder
+            transformer_output = embedded_src
+
+        # Output layer
+        # Input shape: (batch_size, seq_len, hidden_size)
+        # Output shape: (batch_size, seq_len, vocab_size)
+        output = self.fc(transformer_output)
+        return output
 
     def log_performance(self, metric, value):
         self.performance_log.append((metric, value))

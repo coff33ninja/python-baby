@@ -1,7 +1,7 @@
 # d:\Scripts\python-baby\tests\test_grow.py
 import pytest
 import torch
-import torch.nn as nn
+import torch.nn as nn # Import nn for nn.ModuleList
 from unittest.mock import patch, MagicMock
 import copy
 import requests # For requests.RequestException
@@ -24,6 +24,19 @@ def mock_requests_post_response(status_code, json_data=None, raise_exception=Non
     if raise_exception:
         mock_resp.raise_for_status.side_effect = raise_exception
     return mock_resp
+
+# Minimal nn.Module subclass to act as the layer returned by the mocked constructor.
+# Its 'parameters' method will be replaced by a MagicMock on the instance.
+class MockEncoderLayerModule(nn.Module):
+    def __init__(self, d_model=None, nhead=None, dim_feedforward=None, dropout=None, activation=None, batch_first=None, layer_norm_eps=None, norm_first=None): # Match expected signature
+        super().__init__()
+        # It can be empty or have dummy nn.Parameters if needed for other reasons,
+        # but for this test, we'll mock its 'parameters' method directly on the instance.
+        pass # No specific parameters needed here if we mock the method
+
+    def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False):
+        return src
+
 
 @pytest.fixture
 def base_model():
@@ -69,7 +82,7 @@ def test_grow_model_master_approval_denied_status_code(base_model):
         with patch('grow.requests.post', return_value=mock_response) as mock_post:
             initial_n_layers = base_model.n_layers
             
-            with pytest.raises(Exception, match="Master approval required"):
+            with pytest.raises(Exception, match="Master approval required and action must be 'grow'\\."):
                 grow_model(base_model)
             
             assert base_model.n_layers == initial_n_layers
@@ -86,7 +99,7 @@ def test_grow_model_master_approval_denied_action(base_model):
         with patch('grow.requests.post', return_value=mock_response) as mock_post:
             initial_n_layers = base_model.n_layers
             
-            with pytest.raises(Exception, match="Master approval required"):
+            with pytest.raises(Exception, match="Master approval required and action must be 'grow'\\."):
                 grow_model(base_model)
             
             assert base_model.n_layers == initial_n_layers
@@ -126,21 +139,32 @@ def test_grow_model_success_with_existing_layers(base_model):
 @patch('grow.nn.TransformerEncoderLayer', autospec=True) # Patch with autospec
 def test_grow_model_success_initially_no_layers_in_encoder(mock_transformer_encoder_layer_constructor, base_model):
     """Test successful growth when encoder initially has no layers (testing the 'if old_layers:' branch)."""
-    base_model.transformer.encoder.layers = nn.ModuleList() # Manually empty layers
-    initial_n_layers_attr = base_model.n_layers # Store original attribute value
+    # Replace the ModuleList with a new empty one.
+    # PyTorch's nn.Module handles reassignment of nn.Module attributes by updating _modules.
+    base_model.transformer.encoder.layers = nn.ModuleList()
+    # Set the model's n_layers attribute to 0 to reflect that we want to test the "no initial layers" state
+    base_model.n_layers = 0 
+    initial_n_layers_attr = base_model.n_layers # This will now be 0
 
-    # mock_transformer_encoder_layer_constructor is now an autospec'd mock.
-    # Its .return_value will also be an autospec'd mock (of an instance).
-    # Get a reference to this return_value mock to configure it.
-    mock_created_layer_instance = mock_transformer_encoder_layer_constructor.return_value
+    # Configure the mock constructor to return an instance of our nn.Module mock
+    # This instance will have its own 'parameters' MagicMock method.
+    # This is the actual nn.Module instance that will be added to the model
+    actual_module_instance = MockEncoderLayerModule() 
+    mock_transformer_encoder_layer_constructor.return_value = actual_module_instance
+
+    # We need to mock the 'parameters' *method* of this specific instance.
+    # Create a MagicMock that will replace the 'parameters' method.
+    mock_parameters_method = MagicMock(name="parameters_method_mock")
     
-    # Mock parameters for the created layer
-    # We'll mock two parameters to check the scaling logic.
-    mock_param1_data = MagicMock()
-    mock_param2_data = MagicMock()
-    mock_param1 = MagicMock(data=mock_param1_data)
-    mock_param2 = MagicMock(data=mock_param2_data)
-    mock_created_layer_instance.parameters.return_value = [mock_param1, mock_param2]
+    # Configure what this mocked 'parameters' method will return (an iterator of mock nn.Parameters)
+    mock_param1 = MagicMock(spec=nn.Parameter) # Mock an nn.Parameter
+    mock_param1.numel.return_value = 10 
+    mock_param2 = MagicMock(spec=nn.Parameter) # Mock another nn.Parameter
+    mock_param2.numel.return_value = 20
+    mock_parameters_method.return_value = iter([mock_param1, mock_param2])
+
+    # Replace the 'parameters' method of our specific module instance with our MagicMock
+    actual_module_instance.parameters = mock_parameters_method
 
     mock_response = mock_requests_post_response(status_code=200, json_data={"action": "grow"})
     
@@ -148,35 +172,36 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_transformer_enco
         with patch('grow.requests.post', return_value=mock_response) as mock_post:
             with patch.object(base_model, 'update_stage') as mock_update_stage:
                 grown_model, optimizer = grow_model(base_model)
-    
+
                 assert grown_model is base_model
                 assert isinstance(optimizer, Adam)
                 assert base_model.n_layers == initial_n_layers_attr + 1 
                 assert len(base_model.transformer.encoder.layers) == 1 # One new layer added
                 # Ensure the layer added to the model is our mocked instance
-                assert base_model.transformer.encoder.layers[0] is mock_created_layer_instance
-    
+                assert base_model.transformer.encoder.layers[0] is actual_module_instance
+
                 mock_post.assert_called_once()
                 mock_update_stage.assert_called_once()
-    
+
                 # Assert that TransformerEncoderLayer was called with correct args from base_model
                 # (assuming grow_model uses these attributes from the model)
                 # For parameters not directly on base_model, we assume grow_model uses
-                # PyTorch's nn.TransformerEncoderLayer defaults if not explicitly passed by grow_model.
-                # The `Actual` call reported by the mock indicates that `grow_model` only explicitly
-                # passes `d_model` and `nhead` when no prior layers exist.
-                # If the *intended behavior* of `grow_model` is to explicitly set other parameters
-                # (e.g., dim_feedforward = model.hidden_size * 4, dropout=0.1, activation='relu', batch_first=False),
-                # then the `grow_model` function itself would need to be modified to pass these arguments.
-                # This test change aligns the assertion with the current observed behavior of `grow_model`.
+                # defaults consistent with PythonMasterAI's typical setup or explicit values.
+
+                # Expected values based on PythonMasterAI defaults or grow_model logic
+                expected_dim_feedforward = getattr(base_model, 'dim_feedforward', base_model.hidden_size * 4)
+                expected_dropout = getattr(base_model, 'dropout', 0.1)
+                expected_activation = getattr(base_model, 'activation', "relu")
 
                 mock_transformer_encoder_layer_constructor.assert_called_once_with(
                     d_model=base_model.hidden_size,
-                    nhead=base_model.n_heads
-                    # If grow_model was explicitly passing other arguments, they would be listed here.
-                    # For example: dim_feedforward=expected_dim_feedforward, dropout=expected_dropout, etc.
+                    nhead=base_model.n_heads,
+                    dim_feedforward=expected_dim_feedforward,
+                    dropout=expected_dropout,
+                    activation=expected_activation,
+                    batch_first=True # Asserting that grow_model now passes this
                 )
                 
                 # Assert that the parameters of the (mocked) new layer are accessed (e.g., by the optimizer)
                 # Scaling by mul_(0.1) is not expected here as there's no prior layer to scale from.
-                mock_created_layer_instance.parameters.assert_called_once()
+                mock_parameters_method.assert_called_once()
