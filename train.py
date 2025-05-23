@@ -8,10 +8,15 @@ from transformers import AutoTokenizer
 from scrape_data import scrape_data
 import pytest
 from typing import cast, DefaultDict # Added cast and DefaultDict
+import os # Added for checkpointing
+import torch # Added for checkpointing
 
 model = PythonMasterAI()
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
 optimizer = Adam(model.parameters(), lr=1e-4)
+
+# --- Checkpoint Directory ---
+CHECKPOINT_DIR = "checkpoints"
 
 
 def run_unit_tests(code):
@@ -78,7 +83,11 @@ def train(stage: str):
     print(f"Loading training dataset from data/{stage} for model training...")
     train_dataset = load_dataset("text", data_dir=f"data/{stage}", split="train")
 
-    for epoch in range(5):
+    # Initialize loss variable outside the loop to ensure it's available for checkpointing 
+    # if the dataset is empty or loop doesn't run.
+    current_loss_value = None
+
+    for epoch in range(5): # Assuming 5 epochs as in the original code
         # datasets.Dataset is compatible with torch.utils.data.DataLoader.
         # We use typing.cast to inform Pylance of this compatibility if it struggles
         # to recognize it directly, addressing the reportArgumentType issue.
@@ -97,10 +106,33 @@ def train(stage: str):
             loss.backward()
             optimizer.step()
             model.log_performance("loss", loss.item())
+            current_loss_value = loss.item() # Keep track of the latest loss
             code = model.generate_code("write function")
             if run_unit_tests(code):
                 model.log_task_progress("unit_test_accuracy", success=True)
-        print(f"Epoch {epoch+1}, Loss: {loss.item()}")
+        print(f"Epoch {epoch+1}, Loss: {current_loss_value}")
+
+        # --- Checkpoint Saving Logic ---
+        os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+
+        ai_state_for_checkpoint = model.get_state_for_checkpoint()
+
+        checkpoint_data = {
+            'epoch': epoch + 1, # epoch is 0-indexed, so +1 for human-readable 1-indexed epoch
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': current_loss_value, # Use the loss from the end of the epoch
+            'ai_state': ai_state_for_checkpoint
+        }
+
+        # model.stage and model.configuration_id are accessed from the model instance
+        # The epoch number in the filename should be 1-indexed to match the 'epoch' key in checkpoint_data
+        epoch_checkpoint_filename = os.path.join(CHECKPOINT_DIR, f"model_stage_{model.stage}_config_{model.configuration_id}_epoch_{epoch+1}.pt")
+        latest_checkpoint_filename = os.path.join(CHECKPOINT_DIR, f"model_stage_{model.stage}_config_{model.configuration_id}_latest.pt")
+
+        torch.save(checkpoint_data, epoch_checkpoint_filename)
+        torch.save(checkpoint_data, latest_checkpoint_filename)
+        print(f"Saved checkpoint for epoch {epoch+1} to {epoch_checkpoint_filename} and {latest_checkpoint_filename}")
 
 
 if __name__ == "__main__":

@@ -12,30 +12,28 @@ import time
 from urllib.parse import urlparse
 from datetime import datetime
 import os
+import glob # Added for checkpoint loading
 
 class PythonMasterAI(nn.Module):
     MASTER_KEY = "8f9b7f8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d"
 
     def __init__(self, vocab_size=16000, n_layers=2, n_heads=4, hidden_size=256,
-                 dropout=0.1, dim_feedforward=None, activation="relu"):
+                 dropout=0.1, dim_feedforward=None, activation="relu", previous_model_state_dict=None):
         super().__init__()
-        self.vocab_size = vocab_size # Store for reference
-        self.hidden_size = hidden_size
+        self.vocab_size = vocab_size
+        self.n_layers = n_layers
         self.n_heads = n_heads
-        self.n_layers = n_layers # Initial number of layers
+        self.hidden_size = hidden_size
         self.dropout = dropout
-        self.activation = activation
         self.dim_feedforward = dim_feedforward if dim_feedforward is not None else hidden_size * 4
+        self.activation = activation
 
-        # Utilize hashlib to create a configuration ID
-        config_params_str = f"v{vocab_size}_l{n_layers}_h{n_heads}_hs{hidden_size}_d{dropout}_df{self.dim_feedforward}_a{activation}"
-        self.configuration_id = hashlib.sha1(config_params_str.encode()).hexdigest()[
-            :12
-        ]
-        print(f"Configuration ID: {self.configuration_id}")
+        # Configuration ID must be generated after all architectural params are set.
+        self.recalculate_configuration_id() 
+        print(f"Initialized Model Configuration ID: {self.configuration_id}")
 
         # Initialize the embedding layer
-        self.embed = nn.Embedding(vocab_size, hidden_size)
+        self.embed = nn.Embedding(self.vocab_size, self.hidden_size)
         # The nn.Transformer module will create TransformerEncoderLayers internally.
         # We configure it to use batch_first=True and pass other relevant hyperparameters.
         self.transformer = nn.Transformer(
@@ -62,7 +60,49 @@ class PythonMasterAI(nn.Module):
 
         # Utilize torch for device management
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.to(self.device)
+        # Model must be moved to device BEFORE attempting to load previous_model_state_dict,
+        # as previous_model_state_dict might be on CPU or a different device.
+        # Or, ensure previous_model_state_dict is mapped to self.device before loading.
+        # For simplicity, we build the model on CPU, then load weights, then move to device.
+
+        if previous_model_state_dict:
+            print("Attempting to load weights from previous_model_state_dict...")
+            current_new_model_dict = self.state_dict()
+            loaded_count = 0
+            mismatched_count = 0
+            for name, param_prev in previous_model_state_dict.items():
+                if name in current_new_model_dict:
+                    param_new = current_new_model_dict[name]
+                    if param_prev.shape == param_new.shape:
+                        param_new.copy_(param_prev)
+                        print(f"  Loaded weights for layer: {name} (Shape: {param_prev.shape})")
+                        loaded_count += 1
+                    else:
+                        print(f"  Shape mismatch for layer: {name}. Previous: {param_prev.shape}, New: {param_new.shape}. Skipped.")
+                        mismatched_count += 1
+                else:
+                    print(f"  Layer {name} not found in new model. Skipped.")
+            print(f"Weight loading from previous model complete. Loaded: {loaded_count}, Mismatched/Skipped: {mismatched_count}")
+
+        self.to(self.device) # Move the entire model to the target device after potential weight loading
+
+        # Attempt to load the latest checkpoint for this model's NEW configuration.
+        # This is generally for resuming training if this specific grown configuration was trained before.
+        # Note: If previous_model_state_dict was just used, this usually means it's the first time
+        # this grown configuration is created, so it likely won't find a checkpoint unless
+        # this exact grown configuration was created and checkpointed before.
+        self._try_load_latest_checkpoint()
+
+    def recalculate_configuration_id(self):
+        """Recalculates and updates the model's configuration_id."""
+        config_params_str = (
+            f"v{self.vocab_size}_l{self.n_layers}_h{self.n_heads}_"
+            f"hs{self.hidden_size}_d{self.dropout}_df{self.dim_feedforward}_"
+            f"a{self.activation}"
+        )
+        self.configuration_id = hashlib.sha1(config_params_str.encode()).hexdigest()[:12]
+        print(f"Recalculated Configuration ID: {self.configuration_id}")
+
 
     def forward(self, x, src_key_padding_mask=None):
         # Input x shape: (batch_size, seq_len)
@@ -607,3 +647,153 @@ class PythonMasterAI(nn.Module):
             "sources": list(self.known_sources.keys()),
         }
         return json.dumps(status, indent=2)
+
+    def get_state_for_checkpoint(self):
+        """
+        Gathers the AI's state for checkpointing.
+        For logs, consider saving only recent entries if they become too large.
+        """
+        # For logs, saving the full log for now.
+        # If these grow excessively, consider subsetting, e.g., self.performance_log[-1000:].
+        return {
+            "stage": self.stage,
+            "task_progress": dict(self.task_progress),  # Convert defaultdict to dict for saving
+            "knowledge_gaps": list(self.knowledge_gaps), # Convert to list
+            "known_sources": self.known_sources,
+            "configuration_id": self.configuration_id,
+            "vocab_size": self.vocab_size,
+            "n_layers": self.n_layers,
+            "n_heads": self.n_heads,
+            "hidden_size": self.hidden_size,
+            "dropout": self.dropout,
+            "dim_feedforward": self.dim_feedforward,
+            "activation": self.activation,
+            "performance_log": self.performance_log,
+            "research_log": self.research_log,
+            "source_log": self.source_log,
+        }
+
+    def load_checkpoint(self, filepath, optimizer=None):
+        """
+        Loads a checkpoint from the given filepath.
+        Performs configuration checks before loading state.
+        """
+        print(f"Attempting to load checkpoint from: {filepath}")
+        try:
+            checkpoint = torch.load(filepath, map_location=self.device)
+        except FileNotFoundError:
+            print(f"Checkpoint file not found: {filepath}")
+            return False
+        except Exception as e:
+            print(f"Error loading checkpoint file {filepath}: {e}")
+            return False
+
+        # --- Model Configuration Check ---
+        ckpt_ai_state = checkpoint.get('ai_state')
+        if not ckpt_ai_state:
+            print("Error: Checkpoint is missing 'ai_state'. Cannot verify configuration or load.")
+            return False
+
+        ckpt_config_id = ckpt_ai_state.get('configuration_id')
+        if self.configuration_id != ckpt_config_id:
+            print(f"ERROR: Configuration ID mismatch! Model: '{self.configuration_id}', Checkpoint: '{ckpt_config_id}'. Aborting load.")
+            return False
+
+        # Parameter names to check
+        params_to_check = ['vocab_size', 'n_layers', 'n_heads', 'hidden_size', 'dropout', 'dim_feedforward', 'activation']
+        config_mismatch = False
+        for param in params_to_check:
+            model_param_val = getattr(self, param)
+            ckpt_param_val = ckpt_ai_state.get(param)
+            if model_param_val != ckpt_param_val:
+                print(f"ERROR: Parameter mismatch for '{param}'. Model: {model_param_val}, Checkpoint: {ckpt_param_val}.")
+                config_mismatch = True
+        
+        if config_mismatch:
+            print("Aborting checkpoint loading due to model parameter mismatch.")
+            return False
+        
+        print("Checkpoint configuration matches model configuration.")
+
+        # Load model state
+        try:
+            self.load_state_dict(checkpoint['model_state_dict'])
+            print("Model state_dict loaded successfully.")
+        except Exception as e:
+            print(f"Error loading model state_dict: {e}")
+            return False # Critical error
+
+        # Load optimizer state if provided
+        if optimizer and 'optimizer_state_dict' in checkpoint:
+            try:
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                print("Optimizer state_dict loaded successfully.")
+            except Exception as e:
+                print(f"Error loading optimizer state_dict: {e}")
+                # Non-critical, model state might still be useful
+
+        # Load AI state attributes
+        self.stage = ckpt_ai_state.get('stage', self.stage) # Default to current if not in ckpt
+        
+        # Ensure task_progress is a defaultdict
+        loaded_task_progress = ckpt_ai_state.get('task_progress', {})
+        self.task_progress = defaultdict(int, loaded_task_progress)
+        
+        self.knowledge_gaps = ckpt_ai_state.get('knowledge_gaps', [])
+        self.known_sources = ckpt_ai_state.get('known_sources', self.load_known_sources()) # Default to fresh load if not in ckpt
+        
+        # Use .get for logs for backward compatibility
+        self.performance_log = ckpt_ai_state.get('performance_log', [])
+        self.research_log = ckpt_ai_state.get('research_log', [])
+        self.source_log = ckpt_ai_state.get('source_log', [])
+        
+        loaded_epoch = checkpoint.get('epoch', 'N/A')
+        print(f"Checkpoint loaded successfully. Resuming at stage '{self.stage}', epoch {loaded_epoch}.")
+        return True
+
+    def _try_load_latest_checkpoint(self):
+        """
+        Tries to load the latest checkpoint for the current model's stage and configuration.
+        """
+        Tries to load the latest checkpoint for the current model's stage and configuration.
+        Returns a status message.
+        """
+        CHECKPOINT_DIR = "checkpoints" # Should match train.py
+        status_message = ""
+
+        if not os.path.exists(CHECKPOINT_DIR):
+            status_message = f"Checkpoint directory '{CHECKPOINT_DIR}' not found. Model will start fresh."
+            print(status_message)
+            return status_message
+
+        expected_filename = f"model_stage_{self.stage}_config_{self.configuration_id}_latest.pt"
+        latest_checkpoint_filepath = os.path.join(CHECKPOINT_DIR, expected_filename)
+
+        if os.path.exists(latest_checkpoint_filepath):
+            print(f"Latest checkpoint found for current configuration: {latest_checkpoint_filepath}. Attempting to load.")
+            # The load_checkpoint method already prints detailed success/failure messages.
+            if self.load_checkpoint(latest_checkpoint_filepath):
+                # Try to get epoch from the loaded checkpoint.
+                # The 'epoch' is stored at the top level of the checkpoint, not in 'ai_state'.
+                try:
+                    # Temporarily load just to get the epoch without full state change if self.load_checkpoint didn't make it available
+                    # However, self.load_checkpoint already loaded the state.
+                    # We need a way to access the epoch from the checkpoint that was loaded.
+                    # For simplicity, we'll rely on the print from load_checkpoint and just confirm success.
+                    # A more robust way would be for load_checkpoint to return the epoch or store it.
+                    # Let's assume 'epoch' was part of ai_state for this example, or we enhance load_checkpoint.
+                    # For now, the message from load_checkpoint itself is the primary feedback.
+                    status_message = f"Successfully loaded checkpoint: {latest_checkpoint_filepath}. Stage: {self.stage}."
+                    # To get epoch, we would need load_checkpoint to store it on self, e.g. self.last_loaded_epoch
+                    # Or retrieve it from self.task_progress if we decide to store it there.
+                    # For now, keeping it simple as load_checkpoint already prints the epoch.
+                print(status_message) # Also print to console
+                return status_message
+            else:
+                status_message = f"Found checkpoint {latest_checkpoint_filepath}, but failed to load (e.g., config mismatch or corrupt file). Check console for details."
+                print(status_message) # Also print to console
+                return status_message
+        else:
+            status_message = f"No existing checkpoint found for stage '{self.stage}' and config_id '{self.configuration_id}' at '{latest_checkpoint_filepath}'. Model remains in its current state or starts fresh."
+            print(status_message) # Also print to console
+            return status_message

@@ -167,6 +167,15 @@ def run_scrape_data_script_gui(stage, sources_str, urls_str, user_key):
     
     return run_script_in_background(command, user_key, "Scraping Script (scrape_data.py)")
 
+def load_latest_model_from_checkpoint_gui(user_key):
+    if user_key != MASTER_KEY:
+        return "Invalid Master key. Model reload aborted."
+    
+    # model is the global PythonMasterAI instance
+    # _try_load_latest_checkpoint now returns a status message
+    status_message = model._try_load_latest_checkpoint()
+    return status_message
+
 def list_manual_uploads(target_stage, user_key):
     if user_key != MASTER_KEY:
         return "Invalid Master key"
@@ -267,6 +276,17 @@ with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
             run_scrape_data_script_gui,
             inputs=[scrape_stage_select, scrape_sources_input, scrape_urls_input, scrape_key_input],
             outputs=scrape_run_output
+        )
+    with gr.Tab("Model Management"):
+        gr.Markdown("Manage model checkpoints. Note: The model automatically attempts to load the latest compatible checkpoint on startup.")
+        load_checkpoint_key_input = gr.Textbox(label="Master Key", type="password", placeholder="Enter Master Key to enable loading")
+        load_checkpoint_button = gr.Button("Load Latest Model from Checkpoint for Current Stage & Configuration")
+        load_checkpoint_status_output = gr.Textbox(label="Load Status", interactive=False, lines=3)
+        
+        load_checkpoint_button.click(
+            load_latest_model_from_checkpoint_gui,
+            inputs=[load_checkpoint_key_input],
+            outputs=[load_checkpoint_status_output]
         )
 
 
