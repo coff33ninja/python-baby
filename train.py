@@ -6,8 +6,8 @@ from python_master_ai import PythonMasterAI
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from scrape_data import scrape_data
-import pytest
-from typing import cast, DefaultDict
+import pytest # type: ignore
+from typing import DefaultDict, Sized, TypeVar, Type, cast
 import os
 import torch
 import json
@@ -21,18 +21,53 @@ from utils import get_config_value, setup_logging  # Added for config and loggin
 # If imported, the importing module should have configured logging.
 logger = logging.getLogger(__name__)
 
+# --- Helper function for typed config values ---
+_T = TypeVar('_T', float, int)
+
+def _get_typed_config_value(
+    key: str,
+    default_value: _T,
+    target_type: Type[_T]
+) -> _T:
+    val = get_config_value(key, default_value)
+
+    # If val is already the exact target type (and not a bool masquerading as int)
+    if isinstance(val, target_type) and not (target_type is int and isinstance(val, bool)):
+        return val
+
+    # If val is a type that can be directly converted (int, float, str)
+    if isinstance(val, (int, float, str)):
+        try:
+            return target_type(val) # Attempt conversion
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                f"Could not convert configured value '{str(val)[:100]}' for key '{key}' to {target_type.__name__}: {e}. "
+                f"Using default value: {default_value}"
+            )
+            return default_value
+    else: # val is some other unexpected type (e.g., dict, list)
+        logger.warning(
+            f"Configuration value for '{key}' is of unexpected type: {type(val)} (value: '{str(val)[:100]}'). "
+            f"Using default value: {default_value}"
+        )
+        return default_value
+
 # --- Initialize Model, Tokenizer, Optimizer with config values ---
 # These are initialized at the module level because they might be used by main or helper functions.
 # setup_logging() should ideally be called before these initializations if they log anything.
 # For now, assuming PythonMasterAI's __init__ uses logger internally if needed.
 model = PythonMasterAI()
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
+if tokenizer.pad_token is None: # Ensure pad_token is set for tokenizer
+    tokenizer.pad_token = tokenizer.eos_token
+    logger.info("Tokenizer pad_token set to eos_token as it was None.")
 
-default_lr = get_config_value("training_defaults.learning_rate", 1e-4)
+
+default_lr = _get_typed_config_value("training_defaults.learning_rate", 1e-4, float)
 optimizer = Adam(model.parameters(), lr=default_lr)
 # logger.info(f"Initialized Adam optimizer with learning rate: {default_lr}") # Logger might not be set up yet if not main
 
-CHECKPOINT_DIR = get_config_value("checkpointing.checkpoint_dir", "checkpoints")
+CHECKPOINT_DIR = str(get_config_value("checkpointing.checkpoint_dir", "checkpoints"))
 # logger.info(f"Using checkpoint directory: {CHECKPOINT_DIR}") # Logger might not be set up yet
 
 # TensorBoard Writer (initialized in train() or main if used)
@@ -40,7 +75,7 @@ writer = None
 
 
 def run_unit_tests(code):
-    with open("test_temp.py", "w") as f:
+    with open("test_temp.py", "w", encoding="utf-8") as f:
         f.write(code)
     result = pytest.main(["test_temp.py", "--quiet"])
     return result == 0
@@ -49,15 +84,22 @@ def run_unit_tests(code):
 def train(stage: str):
     global writer  # Access the global writer
     if writer is None:  # Initialize TensorBoard writer if not already done
-        tb_log_dir = get_config_value(
+        tb_log_dir_val = get_config_value(
             "logging.tensorboard_log_dir", "runs/python_master_ai_experiment"
         )
-        if tb_log_dir and tb_log_dir.lower() not in ["none", "null"]:
-            from torch.utils.tensorboard import SummaryWriter
+        # Ensure tb_log_dir_val is a string before .lower() and use
+        is_valid_tb_path_string = isinstance(tb_log_dir_val, str) and \
+                                  tb_log_dir_val.lower() not in ["none", "null"]
 
-            writer = SummaryWriter(log_dir=tb_log_dir)
-            logger.info(f"TensorBoard logging to: {tb_log_dir}")
+        if is_valid_tb_path_string:
+            from torch.utils.tensorboard import SummaryWriter
+            writer = SummaryWriter(log_dir=tb_log_dir_val) # Use tb_log_dir_val here
+            logger.info(f"TensorBoard logging to: {tb_log_dir_val}") # And here
         else:
+            if not isinstance(tb_log_dir_val, str):
+                logger.warning(
+                    f"TensorBoard log_dir from config is not a valid string: '{tb_log_dir_val}'. Disabling TensorBoard."
+                )
             logger.info("TensorBoard logging is disabled via config.")
 
     logger.info(f"Train function initiated for stage: {stage}")
@@ -156,10 +198,17 @@ def train(stage: str):
         train_dataset = load_dataset(
             "text", data_files=data_files_for_load_dataset, split="train"
         )
-        if not train_dataset or len(train_dataset) == 0:
+        if not train_dataset:
             logger.warning(
                 f"The loaded dataset from files {data_files_for_load_dataset} is empty."
             )
+        elif hasattr(train_dataset, "__len__"):
+            # train_dataset has __len__ attribute, so it conforms to Sized.
+            # Cast for Pylance to confirm this understanding for the len() call.
+            if len(cast(Sized, train_dataset)) == 0:
+                logger.warning(
+                    f"The loaded dataset (map-style) from files {data_files_for_load_dataset} is empty."
+                )
     except Exception as e:
         logger.error(
             f"Error loading dataset from specific files {data_files_for_load_dataset}: {e}",
@@ -170,8 +219,8 @@ def train(stage: str):
     current_loss_value = None
     total_steps = 0  # For TensorBoard global_step
 
-    num_epochs = get_config_value("training_defaults.num_epochs", 5)
-    batch_size = get_config_value("training_defaults.batch_size", 4)
+    num_epochs = _get_typed_config_value("training_defaults.num_epochs", 5, int)
+    batch_size = _get_typed_config_value("training_defaults.batch_size", 4, int)
     logger.info(
         f"Starting training for {num_epochs} epochs with batch size {batch_size}."
     )
@@ -180,7 +229,7 @@ def train(stage: str):
         epoch_loss = 0
         num_batches = 0
         for batch in DataLoader(
-            cast(TorchDataset, train_dataset), batch_size=batch_size
+            cast(TorchDataset, train_dataset), batch_size=batch_size # type: ignore
         ):
             tokenized_inputs = tokenizer(
                 batch["text"],
@@ -188,7 +237,7 @@ def train(stage: str):
                 padding=True,
                 truncation=True,
                 max_length=model.hidden_size,
-            )
+            ) # type: ignore
             inputs = {k: v.to(model.device) for k, v in tokenized_inputs.items()}
             outputs = model(
                 inputs["input_ids"], src_key_padding_mask=inputs.get("attention_mask")
@@ -256,10 +305,7 @@ def train(stage: str):
 
 if __name__ == "__main__":
     # Setup logging as early as possible
-    log_f = get_config_value("logging.log_file", "project_ai.log")
-    cl_level_str = get_config_value("logging.console_level", "INFO")
-    fl_level_str = get_config_value("logging.file_level", "DEBUG")
-    setup_logging(cl_level_str, fl_level_str, log_f)
+    setup_logging()
 
     # Now that logging is set up, these initializations can log if needed
     logger.info(f"Initialized Adam optimizer with learning rate: {default_lr}")

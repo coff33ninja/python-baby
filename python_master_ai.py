@@ -11,39 +11,50 @@ import re
 import time
 from urllib.parse import urlparse
 from datetime import datetime
-import os
+import os # type: ignore
 import glob # Added for checkpoint loading
 from utils import get_config_value # Added for config management
+from typing import Optional # Added for Optional type hint
 
 class PythonMasterAI(nn.Module):
     MASTER_KEY = "8f9b7f8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d"
 
-    def __init__(self, vocab_size=None, n_layers=None, n_heads=None, hidden_size=None,
-                 dropout=None, dim_feedforward=None, activation=None,
+    def __init__(self,
+                 vocab_size: Optional[int] = None,
+                 n_layers: Optional[int] = None,
+                 n_heads: Optional[int] = None,
+                 hidden_size: Optional[int] = None,
+                 dropout: Optional[float] = None,
+                 dim_feedforward: Optional[int] = None,
+                 activation: Optional[str] = None,
                  previous_model_state_dict=None, previous_model_config=None):
         super().__init__()
 
         # Load defaults from config, allowing overrides from constructor arguments
-        default_vocab_size = get_config_value('model_defaults.vocab_size', 16000)
-        default_n_layers = get_config_value('model_defaults.n_layers', 2)
-        default_n_heads = get_config_value('model_defaults.n_heads', 4)
-        default_hidden_size = get_config_value('model_defaults.hidden_size', 256)
-        default_dropout = get_config_value('model_defaults.dropout', 0.1)
-        default_activation = get_config_value('model_defaults.activation', "relu")
-        default_ff_factor = get_config_value('model_defaults.dim_feedforward_factor', 4)
+        config_vocab_size = get_config_value('model_defaults.vocab_size', 16000)
+        config_n_layers = get_config_value('model_defaults.n_layers', 2)
+        config_n_heads = get_config_value('model_defaults.n_heads', 4)
+        config_hidden_size = get_config_value('model_defaults.hidden_size', 256)
+        config_dropout = get_config_value('model_defaults.dropout', 0.1)
+        config_activation = get_config_value('model_defaults.activation', "relu")
+        config_ff_factor = get_config_value('model_defaults.dim_feedforward_factor', 4)
 
-        self.vocab_size = vocab_size if vocab_size is not None else default_vocab_size
-        self.n_layers = n_layers if n_layers is not None else default_n_layers
-        self.n_heads = n_heads if n_heads is not None else default_n_heads
-        self.hidden_size = hidden_size if hidden_size is not None else default_hidden_size
-        self.dropout = dropout if dropout is not None else default_dropout
-        self.activation = activation if activation is not None else default_activation
+        # Assign attributes, ensuring correct types
+        self.vocab_size: int = int(vocab_size) if vocab_size is not None else int(config_vocab_size)
+        self.n_layers: int = int(n_layers) if n_layers is not None else int(config_n_layers)
+        self.n_heads: int = int(n_heads) if n_heads is not None else int(config_n_heads)
+        self.hidden_size: int = int(hidden_size) if hidden_size is not None else int(config_hidden_size)
+        self.dropout: float = float(dropout) if dropout is not None else float(config_dropout)
+        self.activation: str = str(activation) if activation is not None else str(config_activation)
+
+        # Ensure ff_factor is int/float before multiplication
+        _ff_factor = int(config_ff_factor)
 
         if dim_feedforward is not None:
-            self.dim_feedforward = dim_feedforward
+            self.dim_feedforward: int = int(dim_feedforward)
         else:
             # Use the hidden_size that was set (either from arg or default)
-            self.dim_feedforward = self.hidden_size * default_ff_factor
+            self.dim_feedforward: int = self.hidden_size * _ff_factor
 
         self.recalculate_configuration_id()
         print(f"Initialized Model Configuration ID: {self.configuration_id}")
@@ -97,10 +108,23 @@ class PythonMasterAI(nn.Module):
                         mismatched_count += 1
                 else:
                     skipped_non_exist +=1
-            print(f"Weight loading from previous model (matching layers) complete. Loaded: {loaded_count}, Shape Mismatched: {mismatched_count}, Not in New Model: {skipped_non_exist}")
+            print(f"Weight loading from previous model (matching layers) complete. Loaded: {loaded_count}, Shape Mismatched: {mismatched_count}, Not in New Model: {skipped_non_exist}") # type: ignore
 
-            if previous_model_config and self.n_layers > previous_model_config.get('n_layers', 0):
-                old_n_layers = previous_model_config['n_layers']
+            prev_n_layers_from_config = 0 # Default if not found or invalid
+            if previous_model_config:
+                val = previous_model_config.get('n_layers')
+                if isinstance(val, int):
+                    prev_n_layers_from_config = val
+                elif val is not None: # It exists but is not int
+                    try:
+                        prev_n_layers_from_config = int(val)
+                        print(f"Warning: 'n_layers' in previous_model_config was '{val}', converted to int: {prev_n_layers_from_config}.")
+                    except (ValueError, TypeError):
+                        print(f"Warning: 'n_layers' in previous_model_config ('{val}') is not a valid integer. Using 0 for comparison.")
+                        prev_n_layers_from_config = 0
+
+            if previous_model_config and self.n_layers > prev_n_layers_from_config:
+                old_n_layers = prev_n_layers_from_config # This is now an int
                 print(f"Seeding new layers ({old_n_layers} to {self.n_layers-1}) from previous model's last layer (layer {old_n_layers-1}).")
                 scaling_factor = 0.5
                 param_suffixes = [
@@ -163,7 +187,7 @@ class PythonMasterAI(nn.Module):
         return output
 
     def generate(self, input_ids: torch.Tensor, attention_mask: torch.Tensor,
-                 max_new_tokens: int = 100, eos_token_id: int = None,
+                 max_new_tokens: int = 100, eos_token_id: Optional[int] = None,
                  temperature: float = 0.7, top_k: int = 50) -> torch.Tensor:
         self.eval()
         if eos_token_id is None and self.tokenizer.eos_token_id is not None:
@@ -707,7 +731,7 @@ class PythonMasterAI(nn.Module):
 
     def _try_load_latest_checkpoint(self):
         # Corrected: Use get_config_value for checkpoint_dir
-        checkpoint_dir_from_config = get_config_value('checkpointing.checkpoint_dir', "checkpoints")
+        checkpoint_dir_from_config = str(get_config_value('checkpointing.checkpoint_dir', "checkpoints"))
         status_message = ""
         if not os.path.exists(checkpoint_dir_from_config):
             status_message = f"Checkpoint directory '{checkpoint_dir_from_config}' not found. Model will start fresh."
