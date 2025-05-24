@@ -359,7 +359,8 @@ def load_latest_model_from_checkpoint_gui(user_key):
 
 def get_dataset_versions(stage_name: str):
     logger.debug(f"Fetching dataset versions for stage: {stage_name}")
-    if not stage_name: return []
+    if not stage_name:
+        return []
     data_dir = os.path.join("data", stage_name)
     if not os.path.isdir(data_dir):
         logger.warning(f"Stage directory not found for dataset versions: {data_dir}")
@@ -367,22 +368,28 @@ def get_dataset_versions(stage_name: str):
     latest_version = None
     latest_txt_path = os.path.join(data_dir, "latest.txt")
     if os.path.exists(latest_txt_path):
-        with open(latest_txt_path, "r") as f: latest_version = f.read().strip()
+        with open(latest_txt_path, "r") as f:
+            latest_version = f.read().strip()
     versions = []
     try:
         for version_dir_name in os.listdir(data_dir):
             version_path = os.path.join(data_dir, version_dir_name)
             if os.path.isdir(version_path) and version_dir_name.replace("_", "").isdigit():
                 manifest_path = os.path.join(version_path, "manifest.json")
-                manifest_data = {}; num_txt_files = 0
+                manifest_data = {}
+                num_txt_files = 0
                 if os.path.exists(manifest_path):
                     try:
-                        with open(manifest_path, "r") as f_manifest: manifest_data = json.load(f_manifest)
-                    except Exception as e: manifest_data = {"error": f"Could not read manifest: {e}"}; logger.error(f"Error reading manifest {manifest_path}: {e}", exc_info=True)
+                        with open(manifest_path, "r") as f_manifest:
+                            manifest_data = json.load(f_manifest)
+                    except Exception as e:
+                        manifest_data = {"error": f"Could not read manifest: {e}"}
+                    logger.error(f"Error reading manifest {manifest_path}: {e}", exc_info=True)
                 try:
                     txt_files = [f for f in os.listdir(version_path) if f.endswith(".txt") and f != "manifest.json"]
                     num_txt_files = len(txt_files)
-                except Exception as e: logger.error(f"Error listing .txt files in {version_path}: {e}", exc_info=True)
+                except Exception as e:
+                    logger.error(f"Error listing .txt files in {version_path}: {e}", exc_info=True)
                 versions.append({
                     "id": version_dir_name, "is_latest": version_dir_name == latest_version,
                     "manifest_type": manifest_data.get("creation_event_type", "N/A"),
@@ -398,7 +405,8 @@ def get_dataset_versions(stage_name: str):
 
 def get_files_in_version(stage_name: str, version_timestamp: str):
     logger.debug(f"Fetching files for stage '{stage_name}', version '{version_timestamp}'.")
-    if not stage_name or not version_timestamp: return []
+    if not stage_name or not version_timestamp:
+        return []
     version_dir = os.path.join("data", stage_name, version_timestamp)
     if not os.path.isdir(version_dir):
         logger.warning(f"Version directory not found: {version_dir}")
@@ -407,9 +415,11 @@ def get_files_in_version(stage_name: str, version_timestamp: str):
     excluded_files = []
     if os.path.exists(manifest_path):
         try:
-            with open(manifest_path, "r") as f_manifest: manifest_data = json.load(f_manifest)
+            with open(manifest_path, "r") as f_manifest:
+                manifest_data = json.load(f_manifest)
             excluded_files = manifest_data.get("excluded_files", [])
-        except Exception as e: logger.warning(f"Could not read manifest for exclusions in {version_dir}: {e}", exc_info=True)
+        except Exception as e:
+            logger.warning(f"Could not read manifest for exclusions in {version_dir}: {e}", exc_info=True)
     files_info = []
     try:
         for filename in os.listdir(version_dir):
@@ -430,7 +440,8 @@ def get_files_in_version(stage_name: str, version_timestamp: str):
 
 def get_file_content_gui(stage_name: str, version_timestamp: str, filename: str):
     logger.debug(f"Fetching content for file '{filename}' in stage '{stage_name}', version '{version_timestamp}'.")
-    if not stage_name or not version_timestamp or not filename: return "Missing stage, version, or filename."
+    if not stage_name or not version_timestamp or not filename:
+        return "Missing stage, version, or filename."
     file_path = os.path.join("data", stage_name, version_timestamp, filename)
     base_dir = os.path.abspath(os.path.join("data", stage_name, version_timestamp))
     abs_file_path = os.path.abspath(file_path)
@@ -477,13 +488,15 @@ def get_file_content_gui(stage_name: str, version_timestamp: str, filename: str)
 
 def get_manifest_content_gui(stage_name: str, version_timestamp: str):
     logger.debug(f"Fetching manifest for stage '{stage_name}', version '{version_timestamp}'.")
-    if not stage_name or not version_timestamp: return "Missing stage or version."
+    if not stage_name or not version_timestamp:
+        return "Missing stage or version."
     manifest_path = os.path.join("data", stage_name, version_timestamp, "manifest.json")
     if not os.path.exists(manifest_path):
         logger.warning(f"Manifest.json not found: {manifest_path}")
         return f"Error: manifest.json not found in {os.path.dirname(manifest_path)}"
     try:
-        with open(manifest_path, "r", encoding="utf-8") as f: manifest_data = json.load(f)
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest_data = json.load(f)
         return json.dumps(manifest_data, indent=4)
     except Exception as e:
         logger.error(f"Error reading manifest.json {manifest_path}: {e}", exc_info=True)
@@ -491,8 +504,10 @@ def get_manifest_content_gui(stage_name: str, version_timestamp: str):
 
 def set_latest_version_gui(stage_name: str, version_timestamp: str, master_key: str):
     logger.info(f"Attempting to set version '{version_timestamp}' as latest for stage '{stage_name}'.")
-    if master_key != MASTER_KEY: logger.warning("Invalid Master key in set_latest_version_gui."); return "Invalid Master key."
-    if not stage_name or not version_timestamp: return "Stage name and version timestamp must be provided."
+    if master_key != MASTER_KEY:
+        logger.warning("Invalid Master key in set_latest_version_gui.")
+    if not stage_name or not version_timestamp:
+        return "Stage name and version timestamp must be provided."
     stage_data_dir = os.path.join("data", stage_name)
     version_path_to_check = os.path.join(stage_data_dir, version_timestamp)
     if not os.path.isdir(version_path_to_check):
@@ -500,7 +515,8 @@ def set_latest_version_gui(stage_name: str, version_timestamp: str, master_key: 
         return f"Error: Version directory '{version_timestamp}' does not exist in stage '{stage_name}'."
     latest_txt_path = os.path.join(stage_data_dir, "latest.txt")
     try:
-        with open(latest_txt_path, "w", encoding="utf-8") as f: f.write(version_timestamp)
+        with open(latest_txt_path, "w", encoding="utf-8") as f:
+            f.write(version_timestamp)
         logger.info(f"Successfully set version '{version_timestamp}' as latest for stage '{stage_name}'.")
         return f"Successfully set version '{version_timestamp}' as latest for stage '{stage_name}'."
     except Exception as e:
@@ -509,22 +525,31 @@ def set_latest_version_gui(stage_name: str, version_timestamp: str, master_key: 
 
 def toggle_file_exclusion_gui(stage_name: str, version_timestamp: str, filename: str, master_key: str):
     logger.info(f"Attempting to toggle exclusion for file '{filename}' in stage '{stage_name}', version '{version_timestamp}'.")
-    if master_key != MASTER_KEY: logger.warning("Invalid Master key in toggle_file_exclusion_gui."); return "Invalid Master key.", False
-    if not stage_name or not version_timestamp or not filename: return "Stage, version, and filename must be provided.", False
+    if master_key != MASTER_KEY:
+        logger.warning("Invalid Master key in toggle_file_exclusion_gui.")
+    return "Invalid Master key.", False
+    if not stage_name or not version_timestamp or not filename:
+        return "Stage, version, and filename must be provided.", False
     manifest_path = os.path.join("data", stage_name, version_timestamp, "manifest.json")
     if not os.path.exists(manifest_path):
         logger.error(f"Manifest.json not found for toggling exclusion: {manifest_path}")
         return f"Error: manifest.json not found in {os.path.dirname(manifest_path)}.", False
     try:
         with open(manifest_path, "r+", encoding="utf-8") as f:
-            manifest_data = json.load(f); excluded_files = manifest_data.get("excluded_files", [])
+            manifest_data = json.load(f)
+            excluded_files = manifest_data.get("excluded_files", [])
             new_exclusion_status = False
             if filename in excluded_files:
-                excluded_files.remove(filename); action_message = f"File '{filename}' UNEXCLUDED."
+                excluded_files.remove(filename)
+                action_message = f"File '{filename}' UNEXCLUDED."
             else:
-                excluded_files.append(filename); action_message = f"File '{filename}' EXCLUDED."; new_exclusion_status = True
+                excluded_files.append(filename)
+                action_message = f"File '{filename}' EXCLUDED."
+                new_exclusion_status = True
             manifest_data["excluded_files"] = sorted(list(set(excluded_files)))
-            f.seek(0); json.dump(manifest_data, f, indent=4); f.truncate()
+            f.seek(0)
+            json.dump(manifest_data, f, indent=4)
+            f.truncate()
         logger.info(f"Successfully updated exclusion for '{filename}'. {action_message}")
         return f"Successfully updated exclusion for '{filename}'. {action_message}", new_exclusion_status
     except Exception as e:
@@ -533,10 +558,13 @@ def toggle_file_exclusion_gui(stage_name: str, version_timestamp: str, filename:
 
 def list_manual_uploads(target_stage, user_key): # This function is mostly for direct user feedback.
     logger.debug(f"Listing manual uploads for stage: {target_stage}")
-    if user_key != MASTER_KEY: return "Invalid Master key"
-    if not target_stage: return "Please select a stage to view uploads for."
+    if user_key != MASTER_KEY:
+        return "Invalid Master key"
+    if not target_stage:
+        return "Please select a stage to view uploads for."
     data_dir = f"data/{target_stage}"
-    if not os.path.exists(data_dir): return f"No data directory found for stage '{target_stage}'. No uploads to list."
+    if not os.path.exists(data_dir):
+        return f"No data directory found for stage '{target_stage}'. No uploads to list."
     manual_files = []
     try:
         for item_name in os.listdir(data_dir):
@@ -546,8 +574,10 @@ def list_manual_uploads(target_stage, user_key): # This function is mostly for d
     except Exception as e:
         logger.error(f"Error reading data directory for stage '{target_stage}': {e}", exc_info=True)
         return f"Error reading data directory for stage '{target_stage}': {e}"
-    if not manual_files: return f"No manually uploaded files found directly in '{data_dir}' matching 'manual_upload_*.txt'."
-    else: return f"Manually uploaded files directly in '{data_dir}':\n" + "\n".join(manual_files)
+    if not manual_files:
+        return f"No manually uploaded files found directly in '{data_dir}' matching 'manual_upload_*.txt'."
+    else:
+        return f"Manually uploaded files directly in '{data_dir}':\n" + "\n".join(manual_files)
 
 available_stages = list(model.define_growth_tasks().keys())
 logger.info(f"Available stages for GUI: {available_stages}")

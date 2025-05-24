@@ -131,8 +131,10 @@ class PythonMasterAI(nn.Module):
                                     print(f"    Warning: Shape mismatch for seeding {new_param_key} from {old_param_key}. Old: {old_param_data.shape}, New: {new_param_data_target.shape}. Using default initialization for this param.")
                             else:
                                 missing_keys_info = []
-                                if not (old_param_key in previous_model_state_dict): missing_keys_info.append(f"old key '{old_param_key}' missing")
-                                if not (new_param_key in current_new_model_state_dict_on_cpu): missing_keys_info.append(f"new key '{new_param_key}' missing")
+                                if not (old_param_key in previous_model_state_dict):
+                                    missing_keys_info.append(f"old key '{old_param_key}' missing")
+                                if not (new_param_key in current_new_model_state_dict_on_cpu):
+                                    missing_keys_info.append(f"new key '{new_param_key}' missing")
                                 print(f"    Warning: Could not seed parameter for suffix '{param_suffix}' ({', '.join(missing_keys_info)}). Using default initialization for this param in new layer {new_layer_idx}.")
                 else:
                     print("  Skipping seeding new layers as previous model had no layers (old_n_layers == 0). New layers will use default initialization.")
@@ -342,7 +344,8 @@ class PythonMasterAI(nn.Module):
                 owner, repo_name_segment = path_parts[0], path_parts[1]
                 repo_name = repo_name_segment.split('/')[0]
                 api_url_to_use = f"https://api.github.com/repos/{owner}/{repo_name}"
-        if not api_url_to_use: return None
+        if not api_url_to_use:
+            return None
         try:
             response = requests.get(api_url_to_use, timeout=5)
             response.raise_for_status()
@@ -357,11 +360,14 @@ class PythonMasterAI(nn.Module):
         if parsed_uri.netloc == "pypi.org":
             path_segments = parsed_uri.path.strip('/').split('/')
             if len(path_segments) > 1:
-                if path_segments[0] == "project": package_name = path_segments[1]
-                elif path_segments[0] == "pypi": package_name = path_segments[1]
+                if path_segments[0] == "project":
+                    package_name = path_segments[1]
+                elif path_segments[0] == "pypi":
+                    package_name = path_segments[1]
         elif not parsed_uri.scheme and not parsed_uri.netloc:
             package_name = package_name_or_url.strip()
-        if not package_name: return None
+        if not package_name:
+            return None
         api_url = f"https://pypi.org/pypi/{package_name}/json"
         try:
             response = requests.get(api_url, timeout=5)
@@ -382,9 +388,12 @@ class PythonMasterAI(nn.Module):
         return [s for s in sources if "trending" in s or "python_docs" in s]
 
     def validate_research_data(self, content, source):
-        if "github" in source: return len(content) > 10 and "python" in content.lower()
-        if "stackoverflow" in source: return len(content.split("\n")) > 1
-        if "pypi" in source or "python_docs" in source: return len(content) > 50
+        if "github" in source:
+            return len(content) > 10 and "python" in content.lower()
+        if "stackoverflow" in source:
+            return len(content.split("\n")) > 1
+        if "pypi" in source or "python_docs" in source:
+            return len(content) > 50
         return True
 
     def get_research_scrape_targets(self):
@@ -416,7 +425,8 @@ class PythonMasterAI(nn.Module):
             file_path = os.path.join(latest_dataset_dir, f"{source_name}.txt")
 
             if os.path.exists(file_path):
-                with open(file_path, "r", encoding="utf-8") as f: content = f.read()
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
                 is_content_valid = self.validate_research_data(content, source_name)
                 for query in queries:
                     if source_name in self.select_research_sources(query):
@@ -425,7 +435,8 @@ class PythonMasterAI(nn.Module):
                                 self.log_research(query, [source_name], success=True)
                                 query_resolution_map[query] = True
                                 research_task_key = next((k for k in self.growth_tasks[self.stage] if k.startswith("research_")), None)
-                                if research_task_key: self.log_task_progress(research_task_key)
+                                if research_task_key:
+                                    self.log_task_progress(research_task_key)
             else:
                 for query in queries:
                     if source_name in self.select_research_sources(query) and not query_resolution_map[query]:
@@ -440,8 +451,10 @@ class PythonMasterAI(nn.Module):
         if resolved_gaps_this_cycle:
             print(f"Knowledge gaps resolved this cycle: {resolved_gaps_this_cycle}")
             self.knowledge_gaps = [gap for gap in self.knowledge_gaps if gap not in resolved_gaps_this_cycle]
-        if queries and not self.knowledge_gaps: print("All knowledge gaps from this research cycle appear to be resolved.")
-        elif queries: print(f"Remaining knowledge gaps after research: {self.knowledge_gaps}")
+        if queries and not self.knowledge_gaps:
+            print("All knowledge gaps from this research cycle appear to be resolved.")
+        elif queries:
+            print(f"Remaining knowledge gaps after research: {self.knowledge_gaps}")
 
     def conduct_research(self):
         print("Conduct_research called. Identifying targets...")
@@ -474,44 +487,74 @@ class PythonMasterAI(nn.Module):
 
     def search_for_sources(self, query):
         candidates = []
-        if self.stage == "baby": candidates.append(("python_blog", "https://python-blog.example.com"))
-        elif self.stage == "toddler": candidates.append(("python_tutorials", "https://tutorials.python.org"))
-        elif self.stage == "teenager": candidates.append(("python_forum", "https://forum.python.org"))
-        else: candidates.append(("python_conference", "https://pycon.org"))
+        if self.stage == "baby":
+            candidates.append(("python_blog", "https://python-blog.example.com"))
+        elif self.stage == "toddler":
+            candidates.append(("python_tutorials", "https://tutorials.python.org"))
+        elif self.stage == "teenager":
+            candidates.append(("python_forum", "https://forum.python.org"))
+        else:
+            candidates.append(("python_conference", "https://pycon.org"))
         return candidates
 
     def evaluate_source(self, source_name, url, query):
-        relevance_score = 0.0; authority_score = 0.0; freshness_score = 0.0
-        query_lower = query.lower(); query_terms = query_lower.split(); relevance_points = 0
-        if any(term in source_name.lower() for term in query_terms): relevance_points += 1
-        if any(term in url.lower() for term in query_terms): relevance_points += 1
-        if "python" in source_name.lower() or "python" in url.lower(): relevance_points += 0.5
+        relevance_score = 0.0
+        authority_score = 0.0
+        freshness_score = 0.0
+        query_lower = query.lower()
+        query_terms = query_lower.split()
+        relevance_points = 0
+        if any(term in source_name.lower() for term in query_terms):
+            relevance_points += 1
+        if any(term in url.lower() for term in query_terms):
+            relevance_points += 1
+        if "python" in source_name.lower() or "python" in url.lower():
+            relevance_points += 0.5
         relevance_score = min(relevance_points / 2.5, 1.0) * 0.4 if relevance_points > 0 else 0.05
-        parsed_url = urlparse(url); domain = parsed_url.netloc.lower()
-        github_details = None; pypi_details = None
-        if "github.com" in domain or "api.github.com" in domain: github_details = self._fetch_github_repo_details(url)
-        elif "pypi.org" in domain: pypi_details = self._fetch_pypi_package_info(url)
+        parsed_url = urlparse(url)
+        domain = parsed_url.netloc.lower()
+        github_details = None
+        pypi_details = None
+        if "github.com" in domain or "api.github.com" in domain:
+            github_details = self._fetch_github_repo_details(url)
+        elif "pypi.org" in domain:
+            pypi_details = self._fetch_pypi_package_info(url)
         if github_details and 'stargazers_count' in github_details:
             stars = github_details['stargazers_count']
-            if stars >= 1000: authority_score = 0.3
-            elif stars >= 100: authority_score = 0.2
-            else: authority_score = 0.1
-        elif pypi_details and 'info' in pypi_details and 'version' in pypi_details['info']: authority_score = 0.25
-        elif "stackoverflow.com" in domain: authority_score = 0.25
-        elif "docs.python.org" in domain or "peps.python.org" in domain: authority_score = 0.3
-        elif any(known_good_domain in domain for known_good_domain in ["realpython.com", "djangoproject.com", "flask.palletsprojects.com"]): authority_score = 0.25
-        else: authority_score = 0.1
-        current_time_ts = time.time(); freshness_score = 0.05
+            if stars >= 1000:
+                authority_score = 0.3
+            elif stars >= 100:
+                authority_score = 0.2
+            else:
+                authority_score = 0.1
+        elif pypi_details and 'info' in pypi_details and 'version' in pypi_details['info']:
+            authority_score = 0.25
+        elif "stackoverflow.com" in domain:
+            authority_score = 0.25
+        elif "docs.python.org" in domain or "peps.python.org" in domain:
+            authority_score = 0.3
+        elif any(known_good_domain in domain for known_good_domain in ["realpython.com", "djangoproject.com", "flask.palletsprojects.com"]):
+            authority_score = 0.25
+        else:
+            authority_score = 0.1
+        current_time_ts = time.time()
+        freshness_score = 0.05
         if github_details and 'pushed_at' in github_details:
             last_push_date_str = github_details['pushed_at']
             try:
-                last_push_dt = datetime.fromisoformat(last_push_date_str.replace('Z', '+00:00')); last_push_ts = last_push_dt.timestamp()
+                last_push_dt = datetime.fromisoformat(last_push_date_str.replace('Z', '+00:00'))
+                last_push_ts = last_push_dt.timestamp()
                 age_days = (current_time_ts - last_push_ts) / (60 * 60 * 24)
-                if age_days <= 30: freshness_score = 0.3
-                elif age_days <= 180: freshness_score = 0.2
-                elif age_days <= 365: freshness_score = 0.15
-                else: freshness_score = 0.05
-            except ValueError: print(f"Warning: Could not parse GitHub date: {last_push_date_str}")
+                if age_days <= 30:
+                    freshness_score = 0.3
+                elif age_days <= 180:
+                    freshness_score = 0.2
+                elif age_days <= 365:
+                    freshness_score = 0.15
+                else:
+                    freshness_score = 0.05
+            except ValueError:
+                print(f"Warning: Could not parse GitHub date: {last_push_date_str}")
         elif pypi_details and 'releases' in pypi_details and pypi_details['releases']:
             latest_version_str = pypi_details.get('info', {}).get('version')
             if latest_version_str and latest_version_str in pypi_details['releases']:
@@ -519,24 +562,34 @@ class PythonMasterAI(nn.Module):
                 if release_dates:
                     latest_upload_time_str = max(release_dates)
                     try:
-                        upload_dt = datetime.fromisoformat(latest_upload_time_str.replace('Z', '+00:00')); upload_ts = upload_dt.timestamp()
+                        upload_dt = datetime.fromisoformat(latest_upload_time_str.replace('Z', '+00:00'));
+                        upload_ts = upload_dt.timestamp()
                         age_days = (current_time_ts - upload_ts) / (60 * 60 * 24)
-                        if age_days <= 90: freshness_score = 0.3
-                        elif age_days <= 365: freshness_score = 0.2
-                        else: freshness_score = 0.1
-                    except ValueError: print(f"Warning: Could not parse PyPI date: {latest_upload_time_str}")
+                        if age_days <= 90:
+                            freshness_score = 0.3
+                        elif age_days <= 365:
+                            freshness_score = 0.2
+                        else:
+                            freshness_score = 0.1
+                    except ValueError:
+                        print(f"Warning: Could not parse PyPI date: {latest_upload_time_str}")
         total_score = relevance_score + authority_score + freshness_score
         print(f"Debug: Evaluated '{source_name}' ({url}) for query '{query}': R={relevance_score:.2f}, A={authority_score:.2f}, F={freshness_score:.2f} -> Total={total_score:.2f}")
         return min(total_score, 1.0)
 
     def prioritize_scraping(self):
         all_sources_for_stage = []
-        if self.stage == "baby": all_sources_for_stage = [s for s in self.known_sources.keys() if "beginner" in s or "study_guides" in s or "stackoverflow_basic" in s]
-        elif self.stage == "toddler": all_sources_for_stage = [s for s in self.known_sources.keys() if "intermediate" in s or "pypi_docs" in s or "real_python" in s]
-        elif self.stage == "teenager": all_sources_for_stage = [s for s in self.known_sources.keys() if "advanced" in s or "peps" in s or "reddit_learnpython" in s]
-        else: all_sources_for_stage = [s for s in self.known_sources.keys() if "trending" in s or "python_docs" in s or "peps" in s]
+        if self.stage == "baby":
+            all_sources_for_stage = [s for s in self.known_sources.keys() if "beginner" in s or "study_guides" in s or "stackoverflow_basic" in s]
+        elif self.stage == "toddler":
+            all_sources_for_stage = [s for s in self.known_sources.keys() if "intermediate" in s or "pypi_docs" in s or "real_python" in s]
+        elif self.stage == "teenager":
+            all_sources_for_stage = [s for s in self.known_sources.keys() if "advanced" in s or "peps" in s or "reddit_learnpython" in s]
+        else:
+            all_sources_for_stage = [s for s in self.known_sources.keys() if "trending" in s or "python_docs" in s or "peps" in s]
         if "pypi_docs" not in all_sources_for_stage and "pypi_docs" in self.known_sources:
-            if self.stage in ["baby", "toddler"]: all_sources_for_stage.append("pypi_docs")
+            if self.stage in ["baby", "toddler"]:
+                all_sources_for_stage.append("pypi_docs")
         valid_sources = [s for s in all_sources_for_stage if s in self.known_sources and self.known_sources[s]]
         return valid_sources
 
@@ -606,21 +659,36 @@ class PythonMasterAI(nn.Module):
             print(f"Error loading checkpoint file {filepath}: {e}")
             return False
         ckpt_ai_state = checkpoint.get('ai_state')
-        if not ckpt_ai_state: print("Error: Checkpoint is missing 'ai_state'. Cannot verify configuration or load."); return False
+        if not ckpt_ai_state:
+            print("Error: Checkpoint is missing 'ai_state'. Cannot verify configuration or load.")
+            return False
         ckpt_config_id = ckpt_ai_state.get('configuration_id')
-        if self.configuration_id != ckpt_config_id: print(f"ERROR: Configuration ID mismatch! Model: '{self.configuration_id}', Checkpoint: '{ckpt_config_id}'. Aborting load."); return False
+        if self.configuration_id != ckpt_config_id:
+            print(f"ERROR: Configuration ID mismatch! Model: '{self.configuration_id}', Checkpoint: '{ckpt_config_id}'. Aborting load.")
+            return False
         params_to_check = ['vocab_size', 'n_layers', 'n_heads', 'hidden_size', 'dropout', 'dim_feedforward', 'activation']
         config_mismatch = False
         for param in params_to_check:
-            model_param_val = getattr(self, param); ckpt_param_val = ckpt_ai_state.get(param)
-            if model_param_val != ckpt_param_val: print(f"ERROR: Parameter mismatch for '{param}'. Model: {model_param_val}, Checkpoint: {ckpt_param_val}."); config_mismatch = True
-        if config_mismatch: print("Aborting checkpoint loading due to model parameter mismatch."); return False
+            model_param_val = getattr(self, param)
+            ckpt_param_val = ckpt_ai_state.get(param)
+            if model_param_val != ckpt_param_val:
+                print(f"ERROR: Parameter mismatch for '{param}'. Model: {model_param_val}, Checkpoint: {ckpt_param_val}.")
+                config_mismatch = True
+        if config_mismatch:
+            print("Aborting checkpoint loading due to model parameter mismatch.")
+        return False
         print("Checkpoint configuration matches model configuration.")
-        try: self.load_state_dict(checkpoint['model_state_dict']); print("Model state_dict loaded successfully.")
-        except Exception as e: print(f"Error loading model state_dict: {e}"); return False
+            try: self.load_state_dict(checkpoint['model_state_dict'])
+            print("Model state_dict loaded successfully.")
+        except Exception as e:
+            print(f"Error loading model state_dict: {e}")
+            return False
         if optimizer and 'optimizer_state_dict' in checkpoint:
-            try: optimizer.load_state_dict(checkpoint['optimizer_state_dict']); print("Optimizer state_dict loaded successfully.")
-            except Exception as e: print(f"Error loading optimizer state_dict: {e}")
+            try:
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                print("Optimizer state_dict loaded successfully.")
+            except Exception as e:
+                print(f"Error loading optimizer state_dict: {e}")
         self.stage = ckpt_ai_state.get('stage', self.stage)
         self.task_progress = defaultdict(int, ckpt_ai_state.get('task_progress', {}))
         self.knowledge_gaps = ckpt_ai_state.get('knowledge_gaps', [])
@@ -639,33 +707,91 @@ class PythonMasterAI(nn.Module):
         status_message = ""
         if not os.path.exists(checkpoint_dir_from_config):
             status_message = f"Checkpoint directory '{checkpoint_dir_from_config}' not found. Model will start fresh."
-            print(status_message); return status_message
+            print(status_message)
+            return status_message
+
+        # --- Attempt 1: Load the specific '_latest.pt' file ---
+        expected_latest_filename = f"model_stage_{self.stage}_config_{self.configuration_id}_latest.pt"
+        latest_checkpoint_filepath = os.path.join(checkpoint_dir_from_config, expected_latest_filename)
+
+        tried_primary = False
+        primary_failed_to_load = False
 
         expected_filename = f"model_stage_{self.stage}_config_{self.configuration_id}_latest.pt"
         latest_checkpoint_filepath = os.path.join(checkpoint_dir_from_config, expected_filename)
 
         if os.path.exists(latest_checkpoint_filepath):
-            print(f"Latest checkpoint found for current configuration: {latest_checkpoint_filepath}. Attempting to load.")
+            tried_primary = True
+            print(f"Primary checkpoint target found: {latest_checkpoint_filepath}. Attempting to load.")
             if self.load_checkpoint(latest_checkpoint_filepath):
-                try: status_message = f"Successfully loaded checkpoint: {latest_checkpoint_filepath}. Stage: {self.stage}."
-                except Exception: pass
-                print(status_message); return status_message
-            else: status_message = f"Found checkpoint {latest_checkpoint_filepath}, but failed to load. Check console for details."
-            print(status_message); return status_message
+                status_message = f"Successfully loaded primary checkpoint: {latest_checkpoint_filepath} (Stage: {self.stage}, Config: {self.configuration_id})."
+                print(status_message)
+                return status_message
+                primary_failed_to_load = True
+                print(f"Found primary checkpoint {latest_checkpoint_filepath}, but failed to load. Will check for alternatives.")
         else:
-            status_message = f"No existing checkpoint for stage '{self.stage}' and config '{self.configuration_id}' at '{latest_checkpoint_filepath}'. Model starts fresh."
-            print(status_message); return status_message
+            print(f"Primary checkpoint '{latest_checkpoint_filepath}' not found. Searching for alternatives.")
+
+        # --- Attempt 2: If '_latest.pt' not found or failed to load, use glob to find other epoch checkpoints ---
+        glob_pattern = os.path.join(checkpoint_dir_from_config, f"model_stage_{self.stage}_config_{self.configuration_id}_epoch_*.pt")
+        print(f"Searching for alternative epoch-based checkpoints with pattern: {glob_pattern}")
+
+        epoch_checkpoints = []
+        for f_path in glob.glob(glob_pattern): # glob is imported at the top
+            filename = os.path.basename(f_path)
+            match = re.search(r"_epoch_(\d+)\.pt$", filename) # re is imported at the top
+            if match:
+                epoch_num = int(match.group(1))
+                epoch_checkpoints.append((epoch_num, f_path))
+
+        if epoch_checkpoints:
+            epoch_checkpoints.sort(key=lambda x: x[0], reverse=True)
+            best_alternative_filepath = epoch_checkpoints[0][1]
+            print(f"Found alternative epoch-based checkpoints. Highest epoch version is: {best_alternative_filepath}")
+
+            if self.load_checkpoint(best_alternative_filepath):
+                if tried_primary and primary_failed_to_load:
+                     status_message = f"Primary checkpoint {latest_checkpoint_filepath} failed. Successfully loaded alternative: {best_alternative_filepath} (Stage: {self.stage}, Config: {self.configuration_id})."
+                else: # Primary was not found
+                     status_message = f"Primary checkpoint not found. Successfully loaded alternative: {best_alternative_filepath} (Stage: {self.stage}, Config: {self.configuration_id})."
+                print(status_message)
+                return status_message
+            else: # Alternative also failed
+                if tried_primary and primary_failed_to_load:
+                    status_message = f"Primary checkpoint {latest_checkpoint_filepath} failed. Alternative {best_alternative_filepath} also failed. Model starts fresh."
+                else: # Primary not found, and alternative failed
+                    status_message = f"Primary checkpoint not found. Alternative {best_alternative_filepath} also failed. Model starts fresh."
+                print(status_message)
+                return status_message
+        else: # No alternative epoch checkpoints found by glob
+            if tried_primary and primary_failed_to_load:
+                status_message = f"Primary checkpoint {latest_checkpoint_filepath} failed. No other alternatives found. Model starts fresh."
+            else: # Primary not found, and no alternatives by glob
+                status_message = f"No suitable checkpoints found for stage '{self.stage}' and config '{self.configuration_id}'. Model starts fresh."
+            print(status_message)
+            return status_message
 
     def get_config_dict(self):
         return {'vocab_size': self.vocab_size, 'n_layers': self.n_layers, 'n_heads': self.n_heads, 'hidden_size': self.hidden_size, 'dropout': self.dropout, 'dim_feedforward': self.dim_feedforward, 'activation': self.activation, 'configuration_id': self.configuration_id}
 
     def get_latest_dataset_path(self, stage: str) -> str | None:
-        stage_data_dir = os.path.join("data", stage); latest_txt_path = os.path.join(stage_data_dir, "latest.txt"); version_timestamp = None
+        stage_data_dir = os.path.join("data", stage)
+        latest_txt_path = os.path.join(stage_data_dir, "latest.txt")
+        version_timestamp = None
         try:
-            with open(latest_txt_path, "r") as f: version_timestamp = f.read().strip()
-        except FileNotFoundError: print(f"Info: 'latest.txt' not found in {stage_data_dir}. No dataset version specified."); return None
-        except Exception as e: print(f"Error reading 'latest.txt' in {stage_data_dir}: {e}"); return None
-        if not version_timestamp: print(f"Info: 'latest.txt' in {stage_data_dir} is empty. No dataset version specified."); return None
+            with open(latest_txt_path, "r") as f:
+                version_timestamp = f.read().strip()
+        except FileNotFoundError:
+            print(f"Info: 'latest.txt' not found in {stage_data_dir}. No dataset version specified.")
+            return None
+        except Exception as e:
+            print(f"Error reading 'latest.txt' in {stage_data_dir}: {e}")
+        return None
+        if not version_timestamp:
+            print(f"Info: 'latest.txt' in {stage_data_dir} is empty. No dataset version specified.")
+            return None
         dataset_path = os.path.join(stage_data_dir, version_timestamp)
-        if not os.path.isdir(dataset_path): print(f"Error: Dataset directory '{dataset_path}' (specified in latest.txt) does not exist."); return None
+        if not os.path.isdir(dataset_path):
+            print(f"Error: Dataset directory '{dataset_path}' (specified in latest.txt) does not exist.")
+        return None
         return dataset_path
