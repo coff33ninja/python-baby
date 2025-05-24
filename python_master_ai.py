@@ -13,23 +13,39 @@ from urllib.parse import urlparse
 from datetime import datetime
 import os
 import glob # Added for checkpoint loading
+from utils import get_config_value # Added for config management
 
 class PythonMasterAI(nn.Module):
     MASTER_KEY = "8f9b7f8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d"
 
-    def __init__(self, vocab_size=16000, n_layers=2, n_heads=4, hidden_size=256,
-                 dropout=0.1, dim_feedforward=None, activation="relu", 
-                 previous_model_state_dict=None, previous_model_config=None): 
+    def __init__(self, vocab_size=None, n_layers=None, n_heads=None, hidden_size=None,
+                 dropout=None, dim_feedforward=None, activation=None,
+                 previous_model_state_dict=None, previous_model_config=None):
         super().__init__()
-        self.vocab_size = vocab_size
-        self.n_layers = n_layers
-        self.n_heads = n_heads
-        self.hidden_size = hidden_size
-        self.dropout = dropout
-        self.dim_feedforward = dim_feedforward if dim_feedforward is not None else hidden_size * 4
-        self.activation = activation
 
-        self.recalculate_configuration_id() 
+        # Load defaults from config, allowing overrides from constructor arguments
+        default_vocab_size = get_config_value('model_defaults.vocab_size', 16000)
+        default_n_layers = get_config_value('model_defaults.n_layers', 2)
+        default_n_heads = get_config_value('model_defaults.n_heads', 4)
+        default_hidden_size = get_config_value('model_defaults.hidden_size', 256)
+        default_dropout = get_config_value('model_defaults.dropout', 0.1)
+        default_activation = get_config_value('model_defaults.activation', "relu")
+        default_ff_factor = get_config_value('model_defaults.dim_feedforward_factor', 4)
+
+        self.vocab_size = vocab_size if vocab_size is not None else default_vocab_size
+        self.n_layers = n_layers if n_layers is not None else default_n_layers
+        self.n_heads = n_heads if n_heads is not None else default_n_heads
+        self.hidden_size = hidden_size if hidden_size is not None else default_hidden_size
+        self.dropout = dropout if dropout is not None else default_dropout
+        self.activation = activation if activation is not None else default_activation
+
+        if dim_feedforward is not None:
+            self.dim_feedforward = dim_feedforward
+        else:
+            # Use the hidden_size that was set (either from arg or default)
+            self.dim_feedforward = self.hidden_size * default_ff_factor
+
+        self.recalculate_configuration_id()
         print(f"Initialized Model Configuration ID: {self.configuration_id}")
 
         self.embed = nn.Embedding(self.vocab_size, self.hidden_size)
@@ -37,13 +53,13 @@ class PythonMasterAI(nn.Module):
             d_model=self.hidden_size,
             nhead=self.n_heads,
             num_encoder_layers=self.n_layers,
-            num_decoder_layers=0, 
+            num_decoder_layers=0,
             dim_feedforward=self.dim_feedforward,
             dropout=self.dropout,
             activation=self.activation,
-            batch_first=True  
+            batch_first=True
         )
-        self.fc = nn.Linear(hidden_size, vocab_size)
+        self.fc = nn.Linear(self.hidden_size, self.vocab_size)
 
         self.performance_log = []
         self.research_log = []
@@ -51,18 +67,18 @@ class PythonMasterAI(nn.Module):
         self.stage = "baby"
         self.growth_tasks = self.define_growth_tasks()
         self.task_progress = defaultdict(int)
-        self.tokenizer = AutoTokenizer.from_pretrained("gpt2") 
-        if self.tokenizer.pad_token is None: 
-            self.tokenizer.pad_token = self.tokenizer.eos_token 
+        self.tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
             print("Tokenizer pad_token set to eos_token.")
 
         self.knowledge_gaps = []
         self.known_sources = self.load_known_sources()
-        self.current_dataset_version = None 
+        self.current_dataset_version = None
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        current_new_model_state_dict_on_cpu = self.state_dict() 
+
+        current_new_model_state_dict_on_cpu = self.state_dict()
 
         if previous_model_state_dict:
             print("Attempting to load weights from previous_model_state_dict (matching layers)...")
@@ -73,7 +89,7 @@ class PythonMasterAI(nn.Module):
                 if name in current_new_model_state_dict_on_cpu:
                     param_new = current_new_model_state_dict_on_cpu[name]
                     if param_prev.shape == param_new.shape:
-                        param_new.copy_(param_prev.clone()) 
+                        param_new.copy_(param_prev.clone())
                         print(f"  Loaded weights for matching layer: {name} (Shape: {param_prev.shape})")
                         loaded_count += 1
                     else:
@@ -86,7 +102,7 @@ class PythonMasterAI(nn.Module):
             if previous_model_config and self.n_layers > previous_model_config.get('n_layers', 0):
                 old_n_layers = previous_model_config['n_layers']
                 print(f"Seeding new layers ({old_n_layers} to {self.n_layers-1}) from previous model's last layer (layer {old_n_layers-1}).")
-                scaling_factor = 0.5 
+                scaling_factor = 0.5
                 param_suffixes = [
                     "self_attn.in_proj_weight", "self_attn.in_proj_bias",
                     "self_attn.out_proj.weight", "self_attn.out_proj.bias",
@@ -95,7 +111,7 @@ class PythonMasterAI(nn.Module):
                     "norm1.weight", "norm1.bias",
                     "norm2.weight", "norm2.bias"
                 ]
-                if old_n_layers > 0: 
+                if old_n_layers > 0:
                     old_last_layer_idx = old_n_layers - 1
                     for new_layer_idx in range(old_n_layers, self.n_layers):
                         print(f"  Initializing new layer {new_layer_idx}:")
@@ -108,8 +124,8 @@ class PythonMasterAI(nn.Module):
                                 old_param_data = previous_model_state_dict[old_param_key]
                                 new_param_data_target = current_new_model_state_dict_on_cpu[new_param_key]
                                 if old_param_data.shape == new_param_data_target.shape:
-                                    new_param_data_target.data.copy_(old_param_data.data.clone()) 
-                                    new_param_data_target.data.mul_(scaling_factor) 
+                                    new_param_data_target.data.copy_(old_param_data.data.clone())
+                                    new_param_data_target.data.mul_(scaling_factor)
                                     print(f"    Seeded {new_param_key} from {old_param_key} with scaling {scaling_factor}")
                                 else:
                                     print(f"    Warning: Shape mismatch for seeding {new_param_key} from {old_param_key}. Old: {old_param_data.shape}, New: {new_param_data_target.shape}. Using default initialization for this param.")
@@ -123,7 +139,7 @@ class PythonMasterAI(nn.Module):
             elif previous_model_config and self.n_layers <= previous_model_config.get('n_layers', 0) :
                  print("Info: New model does not have more layers than previous. No layer seeding needed.")
 
-        self.to(self.device) 
+        self.to(self.device)
         self._try_load_latest_checkpoint()
 
     def recalculate_configuration_id(self):
@@ -137,110 +153,86 @@ class PythonMasterAI(nn.Module):
 
     def forward(self, x, src_key_padding_mask=None):
         embedded_src = self.embed(x)
-        if self.n_layers > 0: 
+        if self.n_layers > 0:
             transformer_output = self.transformer.encoder(embedded_src, src_key_padding_mask=src_key_padding_mask)
-        else: 
+        else:
             transformer_output = embedded_src
         output = self.fc(transformer_output)
         return output
 
-    def generate(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, 
-                 max_new_tokens: int = 100, eos_token_id: int = None, 
+    def generate(self, input_ids: torch.Tensor, attention_mask: torch.Tensor,
+                 max_new_tokens: int = 100, eos_token_id: int = None,
                  temperature: float = 0.7, top_k: int = 50) -> torch.Tensor:
-        """
-        Generates token IDs autoregressively using top-k sampling.
-        max_new_tokens: Maximum number of *new* tokens to generate.
-        """
-        self.eval() 
-        
+        self.eval()
         if eos_token_id is None and self.tokenizer.eos_token_id is not None:
             eos_token_id = self.tokenizer.eos_token_id
-        
-        generated_ids = input_ids # (batch_size, seq_len)
-        
+        generated_ids = input_ids
         with torch.no_grad():
-            for _ in range(max_new_tokens): 
+            for _ in range(max_new_tokens):
                 outputs = self.forward(generated_ids, src_key_padding_mask=attention_mask)
-                next_token_logits = outputs[:, -1, :] 
-                
-                if temperature > 0.001: # Avoid division by zero or near-zero for stability
+                next_token_logits = outputs[:, -1, :]
+                if temperature > 0.001:
                     next_token_logits = next_token_logits / temperature
-                
                 if top_k > 0:
-                    eff_top_k = min(top_k, next_token_logits.size(-1)) 
+                    eff_top_k = min(top_k, next_token_logits.size(-1))
                     top_k_logits, top_k_indices = torch.topk(next_token_logits, eff_top_k, dim=-1)
                     top_k_probs = torch.softmax(top_k_logits, dim=-1)
                     next_token_index_in_top_k = torch.multinomial(top_k_probs, num_samples=1)
                     next_token_id = torch.gather(top_k_indices, -1, next_token_index_in_top_k)
-                else: 
+                else:
                     next_token_id = torch.argmax(next_token_logits, dim=-1, keepdim=True)
-
                 generated_ids = torch.cat([generated_ids, next_token_id], dim=-1)
-                
                 if attention_mask is not None:
                     new_attention_mask_token = torch.ones((attention_mask.shape[0], 1), dtype=attention_mask.dtype, device=self.device)
                     attention_mask = torch.cat([attention_mask, new_attention_mask_token], dim=1)
-
                 if eos_token_id is not None and (next_token_id == eos_token_id).all():
                     break
-                    
         return generated_ids
 
-    def generate_for_evaluation(self, prompt_text: str, task_type: str, 
+    def generate_for_evaluation(self, prompt_text: str, task_type: str,
                                 context_code: str = None, max_gen_length: int = 150) -> str:
-        self.eval() 
-
-        full_prompt = prompt_text 
-        # Task-specific input formatting
+        self.eval()
+        full_prompt = prompt_text
         if task_type == "code_explanation":
             if context_code:
                 full_prompt = f"You are PythonMasterAI. Explain the following Python code based on the request.\n\nCode:\n```python\n{context_code}\n```\n\nRequest: {prompt_text}\n\nExplanation:"
             else:
                 full_prompt = f"You are PythonMasterAI. Provide an explanation for the following concept/request: {prompt_text}\n\nExplanation:"
         elif task_type == "docstring_generation":
-            if context_code: # Expect context_code to be the function definition
+            if context_code:
                 full_prompt = f"You are PythonMasterAI. Generate a Python docstring for the following function. {prompt_text}\n\nFunction:\n```python\n{context_code}\n```\n\nDocstring:"
-            else: 
+            else:
                 full_prompt = f"You are PythonMasterAI. Generate a Python docstring based on the following description: {prompt_text}\n\nDocstring:"
         elif task_type == "code_generation":
             full_prompt = f"You are PythonMasterAI. Generate Python code for the following request: {prompt_text}\n\nCode:"
         elif task_type == "concept_explanation":
             full_prompt = f"You are PythonMasterAI. Explain the following Python concept: {prompt_text}\n\nExplanation:"
-        else: 
-            full_prompt = f"You are PythonMasterAI. Respond to the following: {prompt_text}" # Generic
-        
-        # Tokenization
-        tokenizer_max_input_len = 512 # A reasonable max length for the prompt part
+        else:
+            full_prompt = f"You are PythonMasterAI. Respond to the following: {prompt_text}"
+        tokenizer_max_input_len = 512
         inputs = self.tokenizer(full_prompt, return_tensors="pt", padding="max_length", truncation=True, max_length=tokenizer_max_input_len)
-        
         input_ids = inputs.input_ids.to(self.device)
         attention_mask = inputs.attention_mask.to(self.device)
-        
         eos_token_id_to_use = self.tokenizer.eos_token_id
         if eos_token_id_to_use is None:
             print("Warning: Tokenizer does not have a default eos_token_id. Generation might run to max_gen_length.")
-
-        # Call self.generate
         output_ids = self.generate(
-            input_ids, 
-            attention_mask, 
-            max_new_tokens=max_gen_length, 
+            input_ids,
+            attention_mask,
+            max_new_tokens=max_gen_length,
             eos_token_id=eos_token_id_to_use,
-            temperature=0.7, 
-            top_k=50         
+            temperature=0.7,
+            top_k=50
         )
-        
-        # Decode only the generated part
-        generated_token_ids = output_ids[0, input_ids.size(1):] # Exclude prompt tokens
+        generated_token_ids = output_ids[0, input_ids.size(1):]
         generated_text = self.tokenizer.decode(generated_token_ids, skip_special_tokens=True)
-        
         return generated_text.strip()
 
     def log_performance(self, metric, value):
         self.performance_log.append((metric, value))
         with open("performance_log.json", "a") as f:
             json.dump({"metric": metric, "value": value}, f)
-            f.write("\n") 
+            f.write("\n")
 
     def log_research(self, topic, sources, success, note=""):
         log_entry = {"topic": topic, "sources": sources, "success": success}
@@ -249,7 +241,7 @@ class PythonMasterAI(nn.Module):
         self.research_log.append(log_entry)
         with open("research_log.json", "a") as f:
             json.dump(log_entry, f)
-            f.write("\n") 
+            f.write("\n")
 
     def log_source(self, source, url, score, added):
         self.source_log.append({"source": source, "url": url, "score": score, "added": added})
@@ -352,7 +344,7 @@ class PythonMasterAI(nn.Module):
                 api_url_to_use = f"https://api.github.com/repos/{owner}/{repo_name}"
         if not api_url_to_use: return None
         try:
-            response = requests.get(api_url_to_use, timeout=5) 
+            response = requests.get(api_url_to_use, timeout=5)
             response.raise_for_status()
             return response.json()
         except requests.RequestException as e:
@@ -367,7 +359,7 @@ class PythonMasterAI(nn.Module):
             if len(path_segments) > 1:
                 if path_segments[0] == "project": package_name = path_segments[1]
                 elif path_segments[0] == "pypi": package_name = path_segments[1]
-        elif not parsed_uri.scheme and not parsed_uri.netloc: 
+        elif not parsed_uri.scheme and not parsed_uri.netloc:
             package_name = package_name_or_url.strip()
         if not package_name: return None
         api_url = f"https://pypi.org/pypi/{package_name}/json"
@@ -397,7 +389,7 @@ class PythonMasterAI(nn.Module):
 
     def get_research_scrape_targets(self):
         queries = self.formulate_research_queries()
-        scrape_targets_dict = {} 
+        scrape_targets_dict = {}
         for query in queries:
             selected_sources_for_query = self.select_research_sources(query)
             for src_name in selected_sources_for_query:
@@ -417,11 +409,10 @@ class PythonMasterAI(nn.Module):
         for query in queries:
             all_relevant_sources_for_queries.update(self.select_research_sources(query))
         for source_name in all_relevant_sources_for_queries:
-            # Corrected path for process_scraped_research_data:
             latest_dataset_dir = self.get_latest_dataset_path(stage)
             if not latest_dataset_dir:
                 print(f"Warning: Cannot process research data for stage '{stage}' as no latest dataset directory found.")
-                return 
+                return
             file_path = os.path.join(latest_dataset_dir, f"{source_name}.txt")
 
             if os.path.exists(file_path):
@@ -430,13 +421,13 @@ class PythonMasterAI(nn.Module):
                 for query in queries:
                     if source_name in self.select_research_sources(query):
                         if is_content_valid:
-                            if not query_resolution_map[query]: 
+                            if not query_resolution_map[query]:
                                 self.log_research(query, [source_name], success=True)
                                 query_resolution_map[query] = True
                                 research_task_key = next((k for k in self.growth_tasks[self.stage] if k.startswith("research_")), None)
                                 if research_task_key: self.log_task_progress(research_task_key)
-            else: 
-                for query in queries: 
+            else:
+                for query in queries:
                     if source_name in self.select_research_sources(query) and not query_resolution_map[query]:
                         self.log_research(query, [source_name], success=False, note="Scraped file not found")
                         print(f"Warning: Scraped file {file_path} not found for source {source_name} relevant to query '{query}'.")
@@ -444,7 +435,7 @@ class PythonMasterAI(nn.Module):
         for query, resolved in query_resolution_map.items():
             if resolved:
                 for gap_text in self.knowledge_gaps:
-                    if gap_text.lower() in query.lower(): 
+                    if gap_text.lower() in query.lower():
                         resolved_gaps_this_cycle.add(gap_text)
         if resolved_gaps_this_cycle:
             print(f"Knowledge gaps resolved this cycle: {resolved_gaps_this_cycle}")
@@ -452,12 +443,12 @@ class PythonMasterAI(nn.Module):
         if queries and not self.knowledge_gaps: print("All knowledge gaps from this research cycle appear to be resolved.")
         elif queries: print(f"Remaining knowledge gaps after research: {self.knowledge_gaps}")
 
-    def conduct_research(self): 
+    def conduct_research(self):
         print("Conduct_research called. Identifying targets...")
         research_targets = self.get_research_scrape_targets()
         if research_targets:
             print(f"Conduct_research initiating focused scraping for targets: {research_targets}")
-            from scrape_data import scrape_data 
+            from scrape_data import scrape_data
             sources_to_scrape, urls_to_scrape = zip(*research_targets)
             scrape_data(self.stage, list(sources_to_scrape), list(urls_to_scrape))
         else:
@@ -471,7 +462,7 @@ class PythonMasterAI(nn.Module):
             candidate_sources = self.search_for_sources(query)
             for source, url in candidate_sources:
                 score = self.evaluate_source(source, url, query)
-                if score > 0.7: 
+                if score > 0.7:
                     self.known_sources[source] = [url]
                     self.log_source(source, url, score, added=True)
                     new_sources.append(source)
@@ -516,10 +507,10 @@ class PythonMasterAI(nn.Module):
             try:
                 last_push_dt = datetime.fromisoformat(last_push_date_str.replace('Z', '+00:00')); last_push_ts = last_push_dt.timestamp()
                 age_days = (current_time_ts - last_push_ts) / (60 * 60 * 24)
-                if age_days <= 30: freshness_score = 0.3   
-                elif age_days <= 180: freshness_score = 0.2 
+                if age_days <= 30: freshness_score = 0.3
+                elif age_days <= 180: freshness_score = 0.2
                 elif age_days <= 365: freshness_score = 0.15
-                else: freshness_score = 0.05                
+                else: freshness_score = 0.05
             except ValueError: print(f"Warning: Could not parse GitHub date: {last_push_date_str}")
         elif pypi_details and 'releases' in pypi_details and pypi_details['releases']:
             latest_version_str = pypi_details.get('info', {}).get('version')
@@ -530,7 +521,7 @@ class PythonMasterAI(nn.Module):
                     try:
                         upload_dt = datetime.fromisoformat(latest_upload_time_str.replace('Z', '+00:00')); upload_ts = upload_dt.timestamp()
                         age_days = (current_time_ts - upload_ts) / (60 * 60 * 24)
-                        if age_days <= 90: freshness_score = 0.3  
+                        if age_days <= 90: freshness_score = 0.3
                         elif age_days <= 365: freshness_score = 0.2
                         else: freshness_score = 0.1
                     except ValueError: print(f"Warning: Could not parse PyPI date: {latest_upload_time_str}")
@@ -549,13 +540,12 @@ class PythonMasterAI(nn.Module):
         valid_sources = [s for s in all_sources_for_stage if s in self.known_sources and self.known_sources[s]]
         return valid_sources
 
-    def generate_response(self, input_text): # This is the old generate_code/explain/debug dispatcher
+    def generate_response(self, input_text):
         if self.assess_performance()["needs_research"]:
             self.conduct_research()
             self.discover_new_sources()
-        if "write" in input_text.lower(): # Crude routing
+        if "write" in input_text.lower():
             task = "write_functions" if self.stage == "baby" else "write_classes" if self.stage == "toddler" else "write_complex_scripts"
-            # Using generate_for_evaluation for consistency, assuming "code_generation" task_type
             code = self.generate_for_evaluation(prompt_text=input_text, task_type="code_generation", max_gen_length=200)
             success = self.validate_code(code)
             self.log_task_progress(task, success)
@@ -563,32 +553,24 @@ class PythonMasterAI(nn.Module):
             return f"{self.stage.capitalize()} AI: Generated code:\n```python\n{code}\n```"
         elif "explain" in input_text.lower():
             task = "explain_variables" if self.stage == "baby" else "explain_classes"
-            # Using generate_for_evaluation for consistency
             explanation = self.generate_for_evaluation(prompt_text=input_text, task_type="concept_explanation", max_gen_length=150)
-            self.log_task_progress(task) # Assuming success for explanation
+            self.log_task_progress(task)
             self.identify_knowledge_gaps(input_text, task, True)
             return f"{self.stage.capitalize()} AI: {explanation}"
-        # ... (other conditions for debug_code etc. would also use generate_for_evaluation)
-        # Fallback for general processing if not fitting specific keywords
         general_response = self.generate_for_evaluation(prompt_text=input_text, task_type="general", max_gen_length=100)
         return f"{self.stage.capitalize()} AI: {general_response}"
 
-
-    def generate_code(self, input_text): # Old placeholder, now superseded by generate_for_evaluation
-        # This method can be removed or aliased to generate_for_evaluation with task_type="code_generation"
+    def generate_code(self, input_text):
         print("Warning: generate_code() is deprecated. Use generate_for_evaluation() with task_type='code_generation'.")
         return self.generate_for_evaluation(input_text, "code_generation", max_gen_length=200)
 
-
-    def generate_explanation(self, input_text): # Old placeholder, now superseded by generate_for_evaluation
-        # This method can be removed or aliased to generate_for_evaluation with task_type="concept_explanation"
+    def generate_explanation(self, input_text):
         print("Warning: generate_explanation() is deprecated. Use generate_for_evaluation() with task_type='concept_explanation'.")
         return self.generate_for_evaluation(input_text, "concept_explanation", max_gen_length=150)
 
-    def debug_code(self, input_text): # Old placeholder
+    def debug_code(self, input_text):
         print("Warning: debug_code() is deprecated and not fully implemented in generate_for_evaluation.")
         return self.generate_for_evaluation(input_text, "debug_code_placeholder", max_gen_length=100)
-
 
     def process_input(self, input_text, user_key):
         response = requests.post("http://localhost:8000/master/auth", json={"key": user_key, "command": input_text})
@@ -597,9 +579,7 @@ class PythonMasterAI(nn.Module):
                 self.reset_to_checkpoint()
                 return f"{self.stage.capitalize()} paused by Master’s stop code"
             if "MASTER:" in input_text:
-                # Use the main generate_response which now internally uses generate_for_evaluation
                 return f"Serving Master: {self.generate_response(input_text.replace('MASTER:', ''))}"
-        # Use the main generate_response for non-master commands too
         return self.generate_response(input_text)
 
     def reset_to_checkpoint(self):
@@ -649,18 +629,27 @@ class PythonMasterAI(nn.Module):
         return True
 
     def _try_load_latest_checkpoint(self):
-        CHECKPOINT_DIR = "checkpoints"; status_message = ""
-        if not os.path.exists(CHECKPOINT_DIR): status_message = f"Checkpoint directory '{CHECKPOINT_DIR}' not found. Model will start fresh."; print(status_message); return status_message
+        # Corrected: Use get_config_value for checkpoint_dir
+        checkpoint_dir_from_config = get_config_value('checkpointing.checkpoint_dir', "checkpoints")
+        status_message = ""
+        if not os.path.exists(checkpoint_dir_from_config):
+            status_message = f"Checkpoint directory '{checkpoint_dir_from_config}' not found. Model will start fresh."
+            print(status_message); return status_message
+
         expected_filename = f"model_stage_{self.stage}_config_{self.configuration_id}_latest.pt"
-        latest_checkpoint_filepath = os.path.join(CHECKPOINT_DIR, expected_filename)
+        latest_checkpoint_filepath = os.path.join(checkpoint_dir_from_config, expected_filename)
+
         if os.path.exists(latest_checkpoint_filepath):
             print(f"Latest checkpoint found for current configuration: {latest_checkpoint_filepath}. Attempting to load.")
             if self.load_checkpoint(latest_checkpoint_filepath):
                 try: status_message = f"Successfully loaded checkpoint: {latest_checkpoint_filepath}. Stage: {self.stage}."
-                except Exception: pass 
+                except Exception: pass
                 print(status_message); return status_message
-            else: status_message = f"Found checkpoint {latest_checkpoint_filepath}, but failed to load (e.g., config mismatch or corrupt file). Check console for details."; print(status_message); return status_message
-        else: status_message = f"No existing checkpoint found for stage '{self.stage}' and config_id '{self.configuration_id}' at '{latest_checkpoint_filepath}'. Model remains in its current state or starts fresh."; print(status_message); return status_message
+            else: status_message = f"Found checkpoint {latest_checkpoint_filepath}, but failed to load. Check console for details."
+            print(status_message); return status_message
+        else:
+            status_message = f"No existing checkpoint for stage '{self.stage}' and config '{self.configuration_id}' at '{latest_checkpoint_filepath}'. Model starts fresh."
+            print(status_message); return status_message
 
     def get_config_dict(self):
         return {'vocab_size': self.vocab_size, 'n_layers': self.n_layers, 'n_heads': self.n_heads, 'hidden_size': self.hidden_size, 'dropout': self.dropout, 'dim_feedforward': self.dim_feedforward, 'activation': self.activation, 'configuration_id': self.configuration_id}
