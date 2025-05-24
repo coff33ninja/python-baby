@@ -107,9 +107,8 @@ def _execute_restricted_code_target(
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
-        results["stdout"] = (
-            "".join(_print_collector_instance.collected if _print_collector_instance.collected else []) + # type: ignore[attr-defined]
-            redirected_stdout_exec.getvalue()
+        results["stdout"] = (  # Use printed() method from PrintCollector
+            _print_collector_instance.printed() + redirected_stdout_exec.getvalue()  # type: ignore[attr-defined]
         )
         err_val = redirected_stderr_exec.getvalue()
         if err_val:

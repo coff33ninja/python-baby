@@ -180,8 +180,17 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_
             assert isinstance(optimizer, Adam)
             assert grown_model_instance.n_layers == initial_n_layers_attr + 1
             assert len(grown_model_instance.transformer.encoder.layers) == 1 # One new layer added
-            # Ensure the layer added to the model is our mocked instance
-            assert grown_model_instance.transformer.encoder.layers[0] is actual_module_instance
+            # The TransformerEncoder uses copy.deepcopy(encoder_layer), so we can't use 'is'.
+            # Instead, check the type and that the (deepcopied) mocked 'parameters' method was called.
+            added_layer = grown_model_instance.transformer.encoder.layers[0]
+            assert isinstance(added_layer, MockEncoderLayerModule), \
+            "Layer added is not of the expected mock type MockEncoderLayerModule."
+                
+            # The 'parameters' attribute of actual_module_instance was replaced by mock_parameters_method.
+            # When deepcopied, added_layer.parameters becomes a deepcopy of mock_parameters_method.
+            # This deepcopied mock should have been called by the Adam optimizer.
+            assert hasattr(added_layer, 'parameters') and callable(getattr(added_layer, 'parameters')), "Added layer does not have a callable 'parameters' attribute."
+            added_layer.parameters.assert_called_once()
 
             mock_post.assert_called_once()
             mock_update_stage_on_new_model.assert_called_once()
