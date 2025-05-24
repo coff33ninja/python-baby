@@ -8,7 +8,7 @@ model_defaults:
   hidden_size: 256
   dropout: 0.1
   dim_feedforward_factor: 4 # Multiplied by hidden_size for dim_feedforward
-  activation: "relu"
+  activation: relu
 
 # Training Defaults
 training_defaults:
@@ -18,24 +18,24 @@ training_defaults:
 
 # Checkpointing Configuration
 checkpointing:
-  checkpoint_dir: "checkpoints"
+  checkpoint_dir: checkpoints
 
 # Evaluation Configuration
 evaluation:
-  default_eval_dataset: "sample_evaluation_dataset.jsonl" # Used by evaluate.py if no dataset is specified
-  results_dir: "eval_results" # Used by evaluate.py
+  default_eval_dataset: sample_evaluation_dataset.jsonl # Used by evaluate.py if no dataset is specified
+  results_dir: eval_results # Used by evaluate.py
   secure_exec_timeout: 10 # Seconds for code execution timeout in evaluate.py
 
 # Scraper Configuration
 scraper:
-  default_user_agent: "PythonMasterAI/1.0 (Configurable Scraper)"
+  default_user_agent: PythonMasterAI/1.0 (Configurable Scraper)
 
 # Logging Configuration
 logging:
-  log_file: "project_ai.log" # Path to the log file. Set to null or omit to disable file logging.
-  console_level: "INFO"     # Logging level for console output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-  file_level: "DEBUG"       # Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-  tensorboard_log_dir: "runs/python_master_ai_experiment" # For TensorBoard logging
+  log_file: project_ai.log # Path to the log file. Set to null or omit to disable file logging.
+  console_level: INFO    # Logging level for console output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  file_level: DEBUG       # Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  tensorboard_log_dir: runs/python_master_ai_experiment # For TensorBoard logging
 
 # In your config.yaml
 gui_settings:
