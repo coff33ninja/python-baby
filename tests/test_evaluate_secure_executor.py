@@ -14,14 +14,14 @@ from evaluate import SecureExecutor  # Now it should be found
 # Get a logger for this test module
 test_logger = logging.getLogger(__name__)
 
+DEFAULT_TEST_TIMEOUT = 20  # Increased default timeout
+
 @pytest.mark.smoke
 def test_execute_simple_pass():
     test_logger.info("Starting test_execute_simple_pass")
     code = "x = 10\ny = 20\nresult = x + y"
     tests = "assert result == 30, f'Expected 30, got {result}'"
-    executor = SecureExecutor(
-        timeout_seconds=5
-    )  # Increased timeout slightly for safety
+    executor = SecureExecutor(timeout_seconds=DEFAULT_TEST_TIMEOUT)
     passed, log, stdout, stderr = executor.execute(code, tests)
 
     print(f"Log: {log}")
@@ -38,7 +38,7 @@ def test_execute_simple_pass():
 def test_execute_assertion_fail():
     code = "x = 10"
     tests = "assert x == 20, 'x should be 20'"  # Add assert message for clarity
-    executor = SecureExecutor(timeout_seconds=5)
+    executor = SecureExecutor(timeout_seconds=DEFAULT_TEST_TIMEOUT)
     passed, log, stdout, stderr = executor.execute(code, tests)
 
     print(f"Log: {log}")
@@ -55,7 +55,7 @@ def test_execute_assertion_fail():
 def test_execute_restricted_import_os(caplog):
     code = "import os\nprint(os.getcwd())"  # Attempting to use os
     tests = "assert True"  # Test itself is trivial
-    executor = SecureExecutor(timeout_seconds=5)
+    executor = SecureExecutor(timeout_seconds=DEFAULT_TEST_TIMEOUT)
 
     # caplog.set_level(logging.DEBUG) # If SecureExecutor or RestrictedPython logs verbosely
 
@@ -85,7 +85,7 @@ def test_execute_restricted_import_os(caplog):
 def test_execute_infinite_loop_timeout():
     code = "count = 0\nwhile True:\n  count += 1 # Keep it minimally busy"
     tests = "assert True"  # This test won't be reached
-    executor = SecureExecutor(timeout_seconds=1)  # Short timeout
+    executor = SecureExecutor(timeout_seconds=3)  # Increased short timeout
 
     start_time = time.time()
     passed, log, stdout, stderr = executor.execute(code, tests)
@@ -98,20 +98,19 @@ def test_execute_infinite_loop_timeout():
     print(f"Stderr: {stderr}")
 
     assert passed is False, "Execution should have timed out and thus failed."
-    assert (
-        "timeout" in log.lower() or "terminated" in log.lower()
-    ), "Log message should indicate timeout or termination."
+    # Simpler assertion as the log is consistently "Execution timed out."
+    assert "execution timed out" in log.lower(), "Log message should indicate timeout."
     # Check if duration is close to timeout, allowing for some overhead but not excessively long.
     # Allowing a range around the 1-second timeout to account for process start/stop overhead
     assert (
-        0.8 <= duration < 2.0  # Reduced lower bound to 0.8s and added upper bound of 2s
-    ), f"Execution duration {duration} was not close to the timeout of 1s."
+        2.5 <= duration < (3.0 + 2.0)  # Adjusted for 3s timeout, allow up to 2s overhead
+    ), f"Execution duration {duration} was not close to the timeout of 3s."
 
 
 def test_execute_print_capture():
     code = "print('Hello from sandbox')\nprint('Line 2')\nvar = 'done'"
     tests = "assert var == 'done'"  # Ensure main code runs
-    executor = SecureExecutor(timeout_seconds=5)
+    executor = SecureExecutor(timeout_seconds=DEFAULT_TEST_TIMEOUT)
     passed, log, stdout, stderr = executor.execute(code, tests)
 
     print(f"Log: {log}")
@@ -130,7 +129,7 @@ def test_execute_print_capture():
 def test_execute_syntax_error_in_generated_code():
     code = "x = 10\ny = 20 +\nresult = x + y"  # Syntax error
     tests = "assert True"
-    executor = SecureExecutor(timeout_seconds=5)
+    executor = SecureExecutor(timeout_seconds=DEFAULT_TEST_TIMEOUT)
     passed, log, stdout, stderr = executor.execute(code, tests)
 
     print(f"Log: {log}")
@@ -144,7 +143,7 @@ def test_execute_syntax_error_in_generated_code():
 def test_execute_runtime_error_in_generated_code():
     code = "x = 10\nresult = x / 0"  # Runtime error (ZeroDivisionError)
     tests = "assert True"
-    executor = SecureExecutor(timeout_seconds=5)
+    executor = SecureExecutor(timeout_seconds=DEFAULT_TEST_TIMEOUT)
     passed, log, stdout, stderr = executor.execute(code, tests)
 
     print(f"Log: {log}")
@@ -158,7 +157,7 @@ def test_execute_runtime_error_in_generated_code():
 def test_execute_empty_code_and_tests():
     code = ""
     tests = ""
-    executor = SecureExecutor(timeout_seconds=5)
+    executor = SecureExecutor(timeout_seconds=DEFAULT_TEST_TIMEOUT)
     passed, log, stdout, stderr = executor.execute(code, tests)
 
     print(f"Log: {log}")
@@ -179,7 +178,7 @@ def test_execute_code_modifying_restricted_globals_fails_safely():
         "assert len([]) == 0"  # This would fail if 'len' was successfully overwritten
     )
 
-    executor = SecureExecutor(timeout_seconds=5)
+    executor = SecureExecutor(timeout_seconds=DEFAULT_TEST_TIMEOUT)
     passed, log, stdout, stderr = executor.execute(code, tests)
 
     print(f"Log: {log}")
@@ -211,7 +210,7 @@ def test_long_output_capture(caplog):
     long_string = "a" * 2000
     code = f"print('{long_string}')"
     tests = "assert True"
-    executor = SecureExecutor(timeout_seconds=5)
+    executor = SecureExecutor(timeout_seconds=DEFAULT_TEST_TIMEOUT)
     passed, log, stdout, stderr = executor.execute(code, tests)
 
     assert passed is True

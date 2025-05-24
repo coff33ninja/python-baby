@@ -109,25 +109,30 @@ class PythonMasterAI(nn.Module):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         current_new_model_state_dict_on_cpu = self.state_dict()
-
         if previous_model_state_dict:
             logger.info("Attempting to load weights from previous_model_state_dict (matching layers)...")
+            # Create a dictionary of weights to load, filtering from previous_model_state_dict
+            # for keys that exist in the current model and have matching shapes.
+            state_dict_to_load_for_matching_layers = {}
             loaded_count = 0
             mismatched_count = 0
             skipped_non_exist = 0
+
             for name, param_prev in previous_model_state_dict.items():
-                if name in current_new_model_state_dict_on_cpu:
-                    param_new = current_new_model_state_dict_on_cpu[name]
-                    if param_prev.shape == param_new.shape:
-                        param_new.copy_(param_prev.clone())
+                if name in current_new_model_state_dict_on_cpu: # Check against the new model's structure
+                    if current_new_model_state_dict_on_cpu[name].shape == param_prev.shape:
+                        state_dict_to_load_for_matching_layers[name] = param_prev.clone() # Clone to avoid issues
                         logger.debug(f"  Loaded weights for matching layer: {name} (Shape: {param_prev.shape})")
                         loaded_count += 1
                     else:
-                        logger.warning(f"  Shape mismatch for layer: {name}. Previous: {param_prev.shape}, New: {param_new.shape}. Skipped.")
+                        logger.warning(f"  Shape mismatch for layer: {name}. Previous: {param_prev.shape}, New: {current_new_model_state_dict_on_cpu[name].shape}. Skipped for direct load.")
                         mismatched_count += 1
                 else:
                     skipped_non_exist +=1
-            logger.info(f"Weight loading from previous model (matching layers) complete. Loaded: {loaded_count}, Shape Mismatched: {mismatched_count}, Not in New Model: {skipped_non_exist}")
+            
+            if state_dict_to_load_for_matching_layers:
+                self.load_state_dict(state_dict_to_load_for_matching_layers, strict=False)
+                logger.info(f"Direct weight loading from previous model (matching layers) complete. Loaded: {loaded_count}, Shape Mismatched (skipped direct): {mismatched_count}, Not in New Model (skipped direct): {skipped_non_exist}")
 
             prev_n_layers_from_config = 0 # Default if not found or invalid
             if previous_model_config:
@@ -149,36 +154,38 @@ class PythonMasterAI(nn.Module):
                 param_suffixes = [
                     "self_attn.in_proj_weight", "self_attn.in_proj_bias",
                     "self_attn.out_proj.weight", "self_attn.out_proj.bias",
-                    "linear1.weight", "linear1.bias",
-                    "linear2.weight", "linear2.bias",
-                    "norm1.weight", "norm1.bias",
-                    "norm2.weight", "norm2.bias"
+                    "linear1.weight", "linear1.bias", "norm1.weight", "norm1.bias",
+                    "linear2.weight", "linear2.bias", "norm2.weight", "norm2.bias",
                 ]
                 if old_n_layers > 0:
                     old_last_layer_idx = old_n_layers - 1
                     for new_layer_idx in range(old_n_layers, self.n_layers):
                         logger.debug(f"  Initializing new layer {new_layer_idx}:")
-                        new_layer_prefix = f"transformer.encoder.layers.{new_layer_idx}."
-                        old_last_layer_prefix = f"transformer.encoder.layers.{old_last_layer_idx}."
+                        new_layer_module = self.transformer.encoder.layers[new_layer_idx]
+                        old_last_layer_module = self.transformer.encoder.layers[old_last_layer_idx] # Source of truth for weights
+
                         for param_suffix in param_suffixes:
-                            old_param_key = old_last_layer_prefix + param_suffix
-                            new_param_key = new_layer_prefix + param_suffix
-                            if old_param_key in previous_model_state_dict and new_param_key in current_new_model_state_dict_on_cpu:
-                                old_param_data = previous_model_state_dict[old_param_key]
-                                new_param_data_target = current_new_model_state_dict_on_cpu[new_param_key]
-                                if old_param_data.shape == new_param_data_target.shape:
-                                    new_param_data_target.data.copy_(old_param_data.data.clone())
-                                    new_param_data_target.data.mul_(scaling_factor)
-                                    logger.debug(f"    Seeded {new_param_key} from {old_param_key} with scaling {scaling_factor}")
+                            try:
+                                # Get the actual parameter tensor from the old layer module
+                                # For nested attributes like self_attn.in_proj_weight:
+                                parts = param_suffix.split('.')
+                                old_attr = old_last_layer_module
+                                new_attr = new_layer_module
+                                for part in parts[:-1]:
+                                    old_attr = getattr(old_attr, part)
+                                for part in parts[:-1]:
+                                    new_attr = getattr(new_attr, part)
+                                old_param_data = getattr(old_attr, parts[-1]).data
+                                new_param_to_update = getattr(new_attr, parts[-1])
+
+                                if old_param_data.shape == new_param_to_update.data.shape:
+                                    new_param_to_update.data.copy_(old_param_data.clone())
+                                    new_param_to_update.data.mul_(scaling_factor)
+                                    logger.debug(f"    Seeded {param_suffix} in new layer {new_layer_idx} from old layer {old_last_layer_idx} with scaling {scaling_factor}")
                                 else:
-                                    logger.warning(f"    Shape mismatch for seeding {new_param_key} from {old_param_key}. Old: {old_param_data.shape}, New: {new_param_data_target.shape}. Using default initialization for this param.")
-                            else:
-                                missing_keys_info = []
-                                if old_param_key not in previous_model_state_dict:
-                                    missing_keys_info.append(f"old key '{old_param_key}' missing")
-                                if new_param_key not in current_new_model_state_dict_on_cpu:
-                                    missing_keys_info.append(f"new key '{new_param_key}' missing")
-                                logger.warning(f"    Could not seed parameter for suffix '{param_suffix}' ({', '.join(missing_keys_info)}). Using default initialization for this param in new layer {new_layer_idx}.")
+                                    logger.warning(f"    Shape mismatch for seeding {param_suffix} in new layer {new_layer_idx}. Old: {old_param_data.shape}, New: {new_param_to_update.data.shape}. Using default init.")
+                            except AttributeError:
+                                logger.warning(f"    Attribute error while trying to seed {param_suffix} for new layer {new_layer_idx}. Using default init for this param.")
                 else:
                     logger.info("  Skipping seeding new layers as previous model had no layers (old_n_layers == 0). New layers will use default initialization.")
             elif previous_model_config and self.n_layers <= previous_model_config.get('n_layers', 0) :

@@ -82,7 +82,7 @@ def test_grow_model_master_approval_denied_status_code(base_model):
     with patch.object(base_model, 'assess_performance', return_value={"needs_growth": True}):
         with patch('grow.requests.post', return_value=mock_response) as mock_post:
 
-            with pytest.raises(Exception, match="Master approval failed: 403 Client Error"):
+            with pytest.raises(requests.exceptions.HTTPError, match="403 Client Error"):
                 grow_model(base_model)
 
             mock_post.assert_called_once_with(
@@ -134,7 +134,8 @@ def test_grow_model_success_with_existing_layers(mock_update_stage_on_new_model,
                 assert torch.allclose(actual_tensor_in_new_layer, expected_tensor_after_scaling, atol=1e-7), \
                     f"Parameter {param_name} in new layer not scaled correctly."
 
-@patch('torch.nn.TransformerEncoderLayer', autospec=True) # Changed to patch in torch.nn
+# Patch torch.nn.TransformerEncoderLayer where it's used by torch.nn.Transformer
+@patch('torch.nn.modules.transformer.TransformerEncoderLayer')
 @patch('python_master_ai.PythonMasterAI.update_stage')
 def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_new_model, mock_torch_encoder_layer_constructor, base_model): # Renamed patch var
     """Test successful growth when encoder initially has no layers (testing the 'if old_layers:' branch)."""
@@ -144,6 +145,10 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_
     # Set the model's n_layers attribute to 0 to reflect that we want to test the "no initial layers" state
     base_model.n_layers = 0
     initial_n_layers_attr = base_model.n_layers # This will now be 0
+
+    # Make the mock_torch_encoder_layer_constructor (which replaces the class) behave like a type for isinstance
+    # and ensure it's callable to return our mock instance.
+    mock_torch_encoder_layer_constructor.__bases__ = (torch.nn.TransformerEncoderLayer,) # Make the mock class a "subclass"
 
     # Configure the mock constructor to return an instance of our nn.Module mock
     # This instance will have its own 'parameters' MagicMock method.
