@@ -209,6 +209,7 @@ def main():
     )
 
     args = parser.parse_args()
+    start_eval_time = time.time()
     logger.info(f"Starting evaluation with arguments: {args}")
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -365,6 +366,9 @@ def main():
         sys.exit(1)
 
     summary = {
+        "evaluation_start_time_utc": time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(start_eval_time)
+        ),
         "model_checkpoint_path": args.model_checkpoint_path,
         "model_configuration_id": model_config_id,
         "model_stage_loaded": model_stage_loaded,
@@ -420,6 +424,10 @@ def main():
             ),
         }
 
+    end_eval_time = time.time()
+    total_eval_duration = end_eval_time - start_eval_time
+    summary["total_evaluation_duration_seconds"] = round(total_eval_duration, 2)
+
     results_filename_base = f"eval_results_{model_config_id}_{model_stage_loaded}"
     detailed_results_path = os.path.join(
         args.output_dir, f"{results_filename_base}.jsonl"
@@ -443,7 +451,9 @@ def main():
         logger.error(f"Error saving summary results: {e}", exc_info=True)
 
     logger.info("\n--- Evaluation Summary ---")
-    logger.info(json.dumps(summary, indent=4))  # Log the summary as well
+    # Log the summary as well, including the new duration
+    logger.info(json.dumps(summary, indent=4))
+    logger.info(f"Total evaluation duration: {total_eval_duration:.2f} seconds.")
     print(
         "Evaluation finished. Check logs for details."
     )  # Keep a simple print for final console output
