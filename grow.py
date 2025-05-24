@@ -5,13 +5,39 @@ import requests
 from torch.optim import Adam
 import os
 import logging  # Added for logging
+from typing import TypeVar, Type # Added for helper
 from utils import get_config_value, setup_logging  # Added for config and logging
 
 # --- Initialize logger for this module ---
 logger = logging.getLogger(__name__)
 
 MASTER_KEY = PythonMasterAI.MASTER_KEY
-CHECKPOINT_DIR = get_config_value("checkpointing.checkpoint_dir", "checkpoints")
+
+# --- Helper function for typed config values (local to this module) ---
+_T_HELPER = TypeVar('_T_HELPER', float, int, str, bool)
+
+def _get_typed_config_value(key: str, default_value: _T_HELPER, target_type: Type[_T_HELPER]) -> _T_HELPER:
+    val = get_config_value(key, default_value) # get_config_value from utils returns Any
+    # If val is already the exact target type (and not a bool masquerading as int/float if target is int/float)
+    if isinstance(val, target_type) and not (target_type in (int, float) and isinstance(val, bool)):
+        return val
+    # If val is a type that can be directly converted (int, float, str, bool)
+    if isinstance(val, (int, float, str, bool)):
+        try:
+            return target_type(val) # Attempt conversion
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                f"Could not convert configured value '{str(val)[:100]}' for key '{key}' to {target_type.__name__}: {e}. "
+                f"Using default value: {default_value}"
+            )
+            return default_value
+    else: # val is some other unexpected type (e.g., dict, list)
+        logger.warning(
+            f"Configuration value for '{key}' is of unexpected type: {type(val)} (value: '{str(val)[:100]}'). "
+            f"Using default value: {default_value}"
+        )
+        return default_value
+CHECKPOINT_DIR = _get_typed_config_value("checkpointing.checkpoint_dir", "checkpoints", str)
 # logger.info(f"Using checkpoint directory: {CHECKPOINT_DIR}") # Logged in main if run directly
 
 
@@ -91,7 +117,7 @@ def grow_model(current_model: PythonMasterAI):
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     # Optimizer learning rate from config for the new optimizer
-    default_lr = get_config_value("training_defaults.learning_rate", 1e-4)
+    default_lr = _get_typed_config_value("training_defaults.learning_rate", 1e-4, float)
     new_optimizer = Adam(grown_model.parameters(), lr=default_lr)
     logger.info(
         f"Created new Adam optimizer for grown model with learning rate: {default_lr}"
@@ -127,12 +153,8 @@ def grow_model(current_model: PythonMasterAI):
 
 if __name__ == "__main__":
     # Setup logging as early as possible
-    log_f = get_config_value(
-        "logging.log_file", "project_ai_grow.log"
-    )  # Different default for grow
-    cl_level_str = get_config_value("logging.console_level", "INFO")
-    fl_level_str = get_config_value("logging.file_level", "DEBUG")
-    setup_logging(cl_level_str, fl_level_str, log_f)
+    # setup_logging() will read from config itself.
+    setup_logging()
 
     logger.info(f"Using checkpoint directory: {CHECKPOINT_DIR}")
     logger.info("--- Initializing base model ---")

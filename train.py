@@ -109,7 +109,7 @@ def train(stage: str):
             f"Updating model's current stage from '{model.stage}' to '{stage}' for this training run."
         )
         model.stage = stage
-        model.task_progress = DefaultDict(int)
+        model.task_progress = DefaultDict(float)
         model.knowledge_gaps = []
 
     scrape_targets_for_research = []

@@ -253,13 +253,8 @@ if __name__ == "__main__":
     import sys
 
     # Setup logging as early as possible
-    log_f = get_config_value(
-        "logging.log_file", "project_ai_scrape.log"
-    )  # Different default for scrape
-    cl_level_str = get_config_value("logging.console_level", "INFO")
-    fl_level_str = get_config_value("logging.file_level", "DEBUG")
-    setup_logging(cl_level_str, fl_level_str, log_f)
-
+    # setup_logging() will read from config itself.
+    setup_logging()
     # Scrapy specific loggers can be further tuned here if needed, after global setup
     # e.g., logging.getLogger('scrapy.core.engine').setLevel(logging.WARNING)
 

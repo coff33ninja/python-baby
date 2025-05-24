@@ -5,6 +5,7 @@ import multiprocessing
 import sys # Added for sys.platform
 import os
 import time
+import queue # For queue.Empty
 import traceback
 from io import StringIO
 
@@ -16,26 +17,51 @@ if sys.platform == "win32":
 import torch
 import evaluate as hf_evaluate # Use the 'evaluate' library for metrics
 from RestrictedPython import compile_restricted, safe_globals
-from RestrictedPython.PrintCollector import PrintCollector
+from RestrictedPython.PrintCollector import PrintCollector # type: ignore
 
 from python_master_ai import PythonMasterAI
 from utils import get_config_value, setup_logging  # Added for config and logging
+from typing import Optional, Type, TypeVar # Added for helper and casting
 
 # --- Initialize logger for this module ---
 logger = logging.getLogger(__name__)
 
+# --- Helper function for typed config values (local to this module) ---
+_T_HELPER = TypeVar('_T_HELPER', float, int, str, bool)
+
+def _get_typed_config_value(key: str, default_value: _T_HELPER, target_type: Type[_T_HELPER]) -> _T_HELPER:
+    val = get_config_value(key, default_value) # get_config_value from utils returns Any
+    # If val is already the exact target type (and not a bool masquerading as int/float if target is int/float)
+    if isinstance(val, target_type) and not (target_type in (int, float) and isinstance(val, bool)):
+        return val
+    # If val is a type that can be directly converted (int, float, str, bool)
+    if isinstance(val, (int, float, str, bool)):
+        try:
+            return target_type(val) # Attempt conversion
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                f"Could not convert configured value '{str(val)[:100]}' for key '{key}' to {target_type.__name__}: {e}. "
+                f"Using default value: {default_value}"
+            )
+            return default_value
+    else: # val is some other unexpected type (e.g., dict, list)
+        logger.warning(
+            f"Configuration value for '{key}' is of unexpected type: {type(val)} (value: '{str(val)[:100]}'). "
+            f"Using default value: {default_value}"
+        )
+        return default_value
 
 # --- Secure Code Execution Target Function (for multiprocessing) ---
 def _execute_restricted_code_target(
     code_string: str, tests_string: str, result_queue: multiprocessing.Queue
 ):
     restricted_globals = dict(safe_globals)
-    _print_collector_instance = PrintCollector() # Instantiate PrintCollector
-    restricted_globals["_print_"] = _print_collector_instance
-    restricted_globals["_getattr_"] = getattr
-    restricted_globals["_getitem_"] = lambda obj, index: obj[index]
-    restricted_globals["_write_"] = lambda x: x
-    restricted_globals["__builtins__"]["AssertionError"] = AssertionError
+    _print_collector_instance = PrintCollector()
+    restricted_globals["_print_"] = _print_collector_instance # type: ignore[assignment]
+    restricted_globals["_getattr_"] = getattr # type: ignore[assignment]
+    restricted_globals["_getitem_"] = lambda obj, index: obj[index] # type: ignore[assignment]
+    restricted_globals["_write_"] = lambda x: x # type: ignore[assignment]
+    restricted_globals["__builtins__"]["AssertionError"] = AssertionError # type: ignore[assignment]
     restricted_globals["__builtins__"]["Exception"] = Exception
     restricted_globals["__builtins__"]["True"] = True
     restricted_globals["__builtins__"]["False"] = False
@@ -82,8 +108,8 @@ def _execute_restricted_code_target(
         sys.stdout = old_stdout
         sys.stderr = old_stderr
         results["stdout"] = (
-            _print_collector_instance.collected_output() # Use the instance here
-            + redirected_stdout_exec.getvalue()
+            "".join(_print_collector_instance.collected if _print_collector_instance.collected else []) + # type: ignore[attr-defined]
+            redirected_stdout_exec.getvalue()
         )
         err_val = redirected_stderr_exec.getvalue()
         if err_val:
@@ -98,7 +124,7 @@ def _execute_restricted_code_target(
 # --- Secure Executor Class ---
 class SecureExecutor:
     def __init__(self, timeout_seconds=None):
-        default_timeout = get_config_value("evaluation.secure_exec_timeout", 10)
+        default_timeout = _get_typed_config_value("evaluation.secure_exec_timeout", 10, int)
         self.timeout_seconds = (
             timeout_seconds if timeout_seconds is not None else default_timeout
         )
@@ -140,7 +166,7 @@ class SecureExecutor:
                 results["stdout"],
                 results.get("stderr", ""),
             )
-        except multiprocessing.queues.Empty:
+        except queue.Empty: # Changed from multiprocessing.queues.Empty
             exit_code = process.exitcode
             log_message = f"Execution process {process.pid} ended unexpectedly (exit code: {exit_code}) without returning results via queue."
             logger.error(log_message)
@@ -158,8 +184,8 @@ class SecureExecutor:
 def calculate_text_metrics(predictions: list[str], references: list[list[str]]):
     results = {}
     try:
-        sacrebleu_metric = hf_evaluate.load("sacrebleu")
-        rouge_metric = hf_evaluate.load("rouge")
+        sacrebleu_metric = hf_evaluate.load("sacrebleu") # type: ignore[attr-defined]
+        rouge_metric = hf_evaluate.load("rouge") # type: ignore[attr-defined]
         str_predictions = [str(p) for p in predictions]
         sacrebleu_score = sacrebleu_metric.compute(
             predictions=str_predictions, references=references
@@ -182,11 +208,11 @@ def calculate_text_metrics(predictions: list[str], references: list[list[str]]):
 
 
 def main():
-    default_output_dir = get_config_value("evaluation.results_dir", "eval_results")
-    default_dataset_path = get_config_value(
+    default_output_dir = _get_typed_config_value("evaluation.results_dir", "eval_results", str)
+    default_dataset_path = _get_typed_config_value(
         "evaluation.default_eval_dataset", "sample_evaluation_dataset.jsonl"
-    )
-    default_timeout = get_config_value("evaluation.secure_exec_timeout", 10)
+    , str)
+    default_timeout_main = _get_typed_config_value("evaluation.secure_exec_timeout", 10, int)
 
     parser = argparse.ArgumentParser(description="Evaluate PythonMasterAI model.")
     parser.add_argument(
@@ -210,8 +236,8 @@ def main():
     parser.add_argument(
         "--timeout_seconds",
         type=int,
-        default=default_timeout,
-        help=f"Timeout for code execution in seconds. Default: {default_timeout}",
+        default=default_timeout_main,
+        help=f"Timeout for code execution in seconds. Default: {default_timeout_main}",
     )
 
     args = parser.parse_args()
@@ -260,11 +286,20 @@ def main():
                 task_id = task_data.get("task_id", f"task_{line_num+1}")
                 task_type = task_data.get("task_type")
                 prompt = task_data.get("prompt")
-                context_code = (
-                    task_data.get("reference_code")
-                    if task_type in ["code_explanation", "docstring_generation"]
-                    else None
-                )
+
+                raw_val_context_code = task_data.get("reference_code")
+                eval_context_code: Optional[str] = None
+                if task_type in ["code_explanation", "docstring_generation"]:
+                    if isinstance(raw_val_context_code, str):
+                        eval_context_code = raw_val_context_code
+                    elif raw_val_context_code is not None:
+                        logger.info(f"Task {task_id}: Converting non-string reference_code to string.")
+                        try:
+                            eval_context_code = str(raw_val_context_code)
+                        except Exception:
+                            logger.warning(f"Could not convert reference_code to string for task {task_id}. Treating as None.")
+                            eval_context_code = None
+                # If raw_val_context_code is None, eval_context_code remains None
 
                 logger.info(f"Processing Task ID: {task_id}, Type: {task_type}")
                 if not task_type or not prompt:
@@ -282,8 +317,8 @@ def main():
                 generated_output = model.generate_for_evaluation(
                     prompt_text=prompt,
                     task_type=task_type,
-                    context_code=context_code,
-                    max_gen_length=512,
+                    context_code=eval_context_code, # type: ignore[arg-type]
+                    max_gen_length=512
                 )
                 task_result_detail = {
                     "task_id": task_id,
@@ -468,11 +503,6 @@ def main():
 
 if __name__ == "__main__":
     # Setup logging using values from config file
-    log_f = get_config_value(
-        "logging.log_file", "project_ai_evaluate.log"
-    )  # Different default for evaluate
-    cl_level_str = get_config_value("logging.console_level", "INFO")
-    fl_level_str = get_config_value("logging.file_level", "DEBUG")
-    setup_logging(cl_level_str, fl_level_str, log_f)
-
+    # setup_logging() will read from config itself.
+    setup_logging()
     main()

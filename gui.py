@@ -10,6 +10,7 @@ import sys
 import traceback
 import logging # Added for logging
 from utils import get_config_value, setup_logging # Added for config and logging
+from typing import TypeVar, Type  # Added for helper
 
 # --- Setup Logging ---
 # Call setup_logging early, using config values.
@@ -18,6 +19,38 @@ setup_logging()  # Removed arguments since setup_logging does not accept any.
 
 # --- Initialize logger for this module ---
 logger = logging.getLogger(__name__)
+# --- Helper function for typed config values (local to this module) ---
+
+_T_HELPER_GUI = TypeVar("_T_HELPER_GUI", float, int, str, bool)
+
+def _get_typed_config_value(
+    key: str, default_value: _T_HELPER_GUI, target_type: Type[_T_HELPER_GUI]
+) -> _T_HELPER_GUI:
+    val = get_config_value(
+        key, default_value
+    )  # get_config_value from utils returns Any
+    # If val is already the exact target type (and not a bool masquerading as int/float if target is int/float)
+    if isinstance(val, target_type) and not (
+        target_type in (int, float) and isinstance(val, bool)
+    ):
+        return val
+    # If val is a type that can be directly converted (int, float, str, bool)
+    if isinstance(val, (int, float, str, bool)):
+        try:
+            return target_type(val)  # Attempt conversion
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                f"Could not convert configured value '{str(val)[:100]}' for key '{key}' to {target_type.__name__}: {e}. "
+                f"Using default value: {default_value}"
+            )
+            return default_value
+    else:  # val is some other unexpected type (e.g., dict, list)
+        logger.warning(
+            f"Configuration value for '{key}' is of unexpected type: {type(val)} (value: '{str(val)[:100]}'). "
+            f"Using default value: {default_value}"
+        )
+        return default_value
+
 
 # Attempt to import PyPDF2 for PDF processing
 try:
@@ -459,8 +492,12 @@ def get_file_content_gui(stage_name: str, version_timestamp: str, filename: str)
             # Get truncation limits from config, with defaults
             default_max_bytes = 1024 * 1024  # 1MB
             default_max_lines = 200
-            max_bytes_limit = get_config_value("gui_settings.file_preview.max_bytes", default_max_bytes)
-            max_lines_limit = get_config_value("gui_settings.file_preview.max_lines", default_max_lines)
+            max_bytes_limit = _get_typed_config_value(
+                "gui_settings.file_preview.max_bytes", default_max_bytes, int
+            )
+            max_lines_limit = _get_typed_config_value(
+                "gui_settings.file_preview.max_lines", default_max_lines, int
+            )
 
             for i, line in enumerate(f):
                 if i >= max_lines_limit:
@@ -661,8 +698,8 @@ with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
         def update_version_action_dropdown(versions_data):
             if versions_data is not None and not versions_data.empty:
                 version_ids = versions_data["Version ID"].tolist()
-                return gr.Dropdown.update(choices=version_ids, value=version_ids[0] if version_ids else None)
-            return gr.Dropdown.update(choices=[], value=None)
+                return gr.Dropdown.update(choices=version_ids, value=version_ids[0] if version_ids else None)  # type: ignore[attr-defined]
+            return gr.Dropdown.update(choices=[], value=None)  # type: ignore[attr-defined]
         dm_versions_df.change(update_version_action_dropdown, inputs=[dm_versions_df], outputs=[dm_version_select_for_actions])
         dm_set_latest_btn.click(set_latest_version_gui, inputs=[dm_stage_select, dm_version_select_for_actions, dm_master_key_input], outputs=[dm_set_latest_status_text]).then(get_dataset_versions, inputs=[dm_stage_select], outputs=[dm_versions_df])
         dm_view_manifest_btn.click(get_manifest_content_gui, inputs=[dm_stage_select, dm_version_select_for_actions], outputs=[dm_manifest_content_text])
@@ -679,8 +716,8 @@ with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
             if files_data is not None and not files_data.empty:
                 filenames = files_data["Filename"].tolist()
                 valid_filenames = [fn for fn in filenames if not fn.startswith("Error:")]
-                return gr.Dropdown.update(choices=valid_filenames, value=valid_filenames[0] if valid_filenames else None)
-            return gr.Dropdown.update(choices=[], value=None)
+                return gr.Dropdown.update(choices=valid_filenames, value=valid_filenames[0] if valid_filenames else None)  # type: ignore[attr-defined]
+            return gr.Dropdown.update(choices=[], value=None)  # type: ignore[attr-defined]
         dm_files_df.change(update_file_action_dropdown, inputs=[dm_files_df], outputs=[dm_file_select_for_actions])
         dm_file_select_for_actions.change(get_file_content_gui, inputs=[dm_stage_select, dm_selected_version_id_state, dm_file_select_for_actions], outputs=[dm_file_content_text])
         dm_toggle_exclusion_btn.click(toggle_file_exclusion_gui, inputs=[dm_stage_select, dm_selected_version_id_state, dm_file_select_for_actions, dm_master_key_input], outputs=[dm_toggle_exclusion_status_text]).then(lambda stage, version: get_files_in_version(stage, version), inputs=[dm_stage_select, dm_selected_version_id_state],outputs=[dm_files_df])

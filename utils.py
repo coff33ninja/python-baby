@@ -57,12 +57,33 @@ def setup_logging():
     if _logging_configured:
         return
 
-    # Load logging configuration using get_config_value
-    log_file = get_config_value(
-        "logging.log_file", "project_ai.log"
-    )  # Default to project_ai.log
-    log_level_console_str = get_config_value("logging.console_level", "INFO")
-    log_level_file_str = get_config_value("logging.file_level", "DEBUG")
+    # Load logging configuration and ensure correct types
+    log_file_config = get_config_value("logging.log_file", "project_ai.log")
+    if not isinstance(log_file_config, str):
+        logger.warning(
+            f"Configuration 'logging.log_file' has unexpected type {type(log_file_config)}. Using default 'project_ai.log'."
+        )
+        log_file = "project_ai.log"
+    else:
+        log_file = log_file_config
+
+    log_level_console_config = get_config_value("logging.console_level", "INFO")
+    if not isinstance(log_level_console_config, str):
+        logger.warning(
+            f"Configuration 'logging.console_level' has unexpected type {type(log_level_console_config)}. Using default 'INFO'."
+        )
+        log_level_console_str = "INFO"
+    else:
+        log_level_console_str = log_level_console_config
+
+    log_level_file_config = get_config_value("logging.file_level", "DEBUG")
+    if not isinstance(log_level_file_config, str):
+        logger.warning(
+            f"Configuration 'logging.file_level' has unexpected type {type(log_level_file_config)}. Using default 'DEBUG'."
+        )
+        log_level_file_str = "DEBUG"
+    else:
+        log_level_file_str = log_level_file_config
 
     # Ensure log file directory exists if log_file is specified
     if log_file:
@@ -70,14 +91,14 @@ def setup_logging():
         if log_dir and not os.path.exists(log_dir):
             os.makedirs(log_dir, exist_ok=True)
 
-    logger = logging.getLogger()  # Root logger
-    logger.setLevel(
+    root_logger = logging.getLogger()  # Root logger, renamed from 'logger'
+    root_logger.setLevel(
         logging.DEBUG
     )  # Set root logger level to the lowest of all handlers
 
     # Prevent duplicate messages if this function is called multiple times (e.g., in tests)
-    if logger.hasHandlers():
-        logger.handlers.clear()
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
 
     # Console Handler
     console_handler = logging.StreamHandler(sys.stdout)  # Explicitly use sys.stdout
@@ -90,7 +111,7 @@ def setup_logging():
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
     console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
+    root_logger.addHandler(console_handler)
 
     # File Handler (Rotating)
     if (
@@ -112,16 +133,16 @@ def setup_logging():
             "%(asctime)s - %(filename)s:%(lineno)d - %(name)s - %(levelname)s - %(message)s"
         )
         file_handler.setFormatter(file_formatter)
-        logger.addHandler(file_handler)
+        root_logger.addHandler(file_handler)
 
-        logger.info(
+        root_logger.info( # Use root_logger here
             "Logging setup complete. Console Level: %s, File Logging to: %s (Level: %s)",
             log_level_console_str,
             log_file,
             log_level_file_str,
         )
     else:
-        logger.info(
+        root_logger.info( # Use root_logger here
             "Logging setup complete. Console Level: %s. File logging is disabled via config.",
             log_level_console_str,
         )

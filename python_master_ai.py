@@ -14,8 +14,28 @@ from datetime import datetime
 import os # type: ignore
 import glob # Added for checkpoint loading
 from utils import get_config_value # Added for config management
-from typing import Optional # Added for Optional type hint
+from typing import Optional, TypeVar, Type, cast # Added for Optional type hint and helper
+import logging
 
+# --- Initialize logger for this module ---
+logger = logging.getLogger(__name__)
+
+# --- Helper function for typed config values (local to this module) ---
+_T_HELPER = TypeVar('_T_HELPER', float, int, str)
+
+def _get_typed_config_value_local(key: str, default_value: _T_HELPER, target_type: Type[_T_HELPER]) -> _T_HELPER:
+    val = get_config_value(key, default_value)
+    if isinstance(val, target_type) and not (target_type in (int, float) and isinstance(val, bool)):
+        return val
+    if isinstance(val, (int, float, str, bool)):
+        try:
+            return target_type(val)
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Could not convert config value '{str(val)[:50]}' for '{key}' to {target_type.__name__}. Error: {e}. Using default: {default_value}.")
+            return default_value
+    else:
+        logger.warning(f"Config value for '{key}' is of unexpected type: {type(val).__name__} ('{str(val)[:50]}'). Using default: {default_value}.")
+        return default_value
 class PythonMasterAI(nn.Module):
     MASTER_KEY = "8f9b7f8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d"
 
@@ -31,33 +51,32 @@ class PythonMasterAI(nn.Module):
         super().__init__()
 
         # Load defaults from config, allowing overrides from constructor arguments
-        config_vocab_size = get_config_value('model_defaults.vocab_size', 16000)
-        config_n_layers = get_config_value('model_defaults.n_layers', 2)
-        config_n_heads = get_config_value('model_defaults.n_heads', 4)
-        config_hidden_size = get_config_value('model_defaults.hidden_size', 256)
-        config_dropout = get_config_value('model_defaults.dropout', 0.1)
-        config_activation = get_config_value('model_defaults.activation', "relu")
-        config_ff_factor = get_config_value('model_defaults.dim_feedforward_factor', 4)
+        config_vocab_size = _get_typed_config_value_local('model_defaults.vocab_size', 16000, int)
+        config_n_layers = _get_typed_config_value_local('model_defaults.n_layers', 2, int)
+        config_n_heads = _get_typed_config_value_local('model_defaults.n_heads', 4, int)
+        config_hidden_size = _get_typed_config_value_local('model_defaults.hidden_size', 256, int)
+        config_dropout = _get_typed_config_value_local('model_defaults.dropout', 0.1, float)
+        config_activation = _get_typed_config_value_local('model_defaults.activation', "relu", str)
+        config_ff_factor = _get_typed_config_value_local('model_defaults.dim_feedforward_factor', 4, int)
 
         # Assign attributes, ensuring correct types
-        self.vocab_size: int = int(vocab_size) if vocab_size is not None else int(config_vocab_size)
-        self.n_layers: int = int(n_layers) if n_layers is not None else int(config_n_layers)
-        self.n_heads: int = int(n_heads) if n_heads is not None else int(config_n_heads)
-        self.hidden_size: int = int(hidden_size) if hidden_size is not None else int(config_hidden_size)
-        self.dropout: float = float(dropout) if dropout is not None else float(config_dropout)
-        self.activation: str = str(activation) if activation is not None else str(config_activation)
+        self.vocab_size: int = int(vocab_size) if vocab_size is not None else config_vocab_size
+        self.n_layers: int = int(n_layers) if n_layers is not None else config_n_layers
+        self.n_heads: int = int(n_heads) if n_heads is not None else config_n_heads
+        self.hidden_size: int = int(hidden_size) if hidden_size is not None else config_hidden_size
+        self.dropout: float = float(dropout) if dropout is not None else config_dropout
+        self.activation: str = str(activation) if activation is not None else config_activation
 
         # Ensure ff_factor is int/float before multiplication
-        _ff_factor = int(config_ff_factor)
+        _ff_factor = config_ff_factor
 
         if dim_feedforward is not None:
             self.dim_feedforward: int = int(dim_feedforward)
         else:
             # Use the hidden_size that was set (either from arg or default)
             self.dim_feedforward: int = self.hidden_size * _ff_factor
-
         self.recalculate_configuration_id()
-        print(f"Initialized Model Configuration ID: {self.configuration_id}")
+        logger.info(f"Initialized Model Configuration ID: {self.configuration_id}")
 
         self.embed = nn.Embedding(self.vocab_size, self.hidden_size)
         self.transformer = nn.Transformer(
@@ -76,12 +95,12 @@ class PythonMasterAI(nn.Module):
         self.research_log = []
         self.source_log = []
         self.stage = "baby"
-        self.growth_tasks = self.define_growth_tasks()
-        self.task_progress = defaultdict(int)
+        self.growth_tasks = self.define_growth_tasks() # Defines unit_test_accuracy as float
+        self.task_progress = defaultdict(float) # Changed from int to float
         self.tokenizer = AutoTokenizer.from_pretrained("gpt2")
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-            print("Tokenizer pad_token set to eos_token.")
+            logger.info("Tokenizer pad_token set to eos_token.")
 
         self.knowledge_gaps = []
         self.known_sources = self.load_known_sources()
@@ -92,7 +111,7 @@ class PythonMasterAI(nn.Module):
         current_new_model_state_dict_on_cpu = self.state_dict()
 
         if previous_model_state_dict:
-            print("Attempting to load weights from previous_model_state_dict (matching layers)...")
+            logger.info("Attempting to load weights from previous_model_state_dict (matching layers)...")
             loaded_count = 0
             mismatched_count = 0
             skipped_non_exist = 0
@@ -101,14 +120,14 @@ class PythonMasterAI(nn.Module):
                     param_new = current_new_model_state_dict_on_cpu[name]
                     if param_prev.shape == param_new.shape:
                         param_new.copy_(param_prev.clone())
-                        print(f"  Loaded weights for matching layer: {name} (Shape: {param_prev.shape})")
+                        logger.debug(f"  Loaded weights for matching layer: {name} (Shape: {param_prev.shape})")
                         loaded_count += 1
                     else:
-                        print(f"  Shape mismatch for layer: {name}. Previous: {param_prev.shape}, New: {param_new.shape}. Skipped.")
+                        logger.warning(f"  Shape mismatch for layer: {name}. Previous: {param_prev.shape}, New: {param_new.shape}. Skipped.")
                         mismatched_count += 1
                 else:
                     skipped_non_exist +=1
-            print(f"Weight loading from previous model (matching layers) complete. Loaded: {loaded_count}, Shape Mismatched: {mismatched_count}, Not in New Model: {skipped_non_exist}") # type: ignore
+            logger.info(f"Weight loading from previous model (matching layers) complete. Loaded: {loaded_count}, Shape Mismatched: {mismatched_count}, Not in New Model: {skipped_non_exist}")
 
             prev_n_layers_from_config = 0 # Default if not found or invalid
             if previous_model_config:
@@ -118,14 +137,14 @@ class PythonMasterAI(nn.Module):
                 elif val is not None: # It exists but is not int
                     try:
                         prev_n_layers_from_config = int(val)
-                        print(f"Warning: 'n_layers' in previous_model_config was '{val}', converted to int: {prev_n_layers_from_config}.")
+                        logger.warning(f"'n_layers' in previous_model_config was '{val}', converted to int: {prev_n_layers_from_config}.")
                     except (ValueError, TypeError):
-                        print(f"Warning: 'n_layers' in previous_model_config ('{val}') is not a valid integer. Using 0 for comparison.")
+                        logger.warning(f"'n_layers' in previous_model_config ('{val}') is not a valid integer. Using 0 for comparison.")
                         prev_n_layers_from_config = 0
 
             if previous_model_config and self.n_layers > prev_n_layers_from_config:
                 old_n_layers = prev_n_layers_from_config # This is now an int
-                print(f"Seeding new layers ({old_n_layers} to {self.n_layers-1}) from previous model's last layer (layer {old_n_layers-1}).")
+                logger.info(f"Seeding new layers ({old_n_layers} to {self.n_layers-1}) from previous model's last layer (layer {old_n_layers-1}).")
                 scaling_factor = 0.5
                 param_suffixes = [
                     "self_attn.in_proj_weight", "self_attn.in_proj_bias",
@@ -138,7 +157,7 @@ class PythonMasterAI(nn.Module):
                 if old_n_layers > 0:
                     old_last_layer_idx = old_n_layers - 1
                     for new_layer_idx in range(old_n_layers, self.n_layers):
-                        print(f"  Initializing new layer {new_layer_idx}:")
+                        logger.debug(f"  Initializing new layer {new_layer_idx}:")
                         new_layer_prefix = f"transformer.encoder.layers.{new_layer_idx}."
                         old_last_layer_prefix = f"transformer.encoder.layers.{old_last_layer_idx}."
                         for param_suffix in param_suffixes:
@@ -150,24 +169,23 @@ class PythonMasterAI(nn.Module):
                                 if old_param_data.shape == new_param_data_target.shape:
                                     new_param_data_target.data.copy_(old_param_data.data.clone())
                                     new_param_data_target.data.mul_(scaling_factor)
-                                    print(f"    Seeded {new_param_key} from {old_param_key} with scaling {scaling_factor}")
+                                    logger.debug(f"    Seeded {new_param_key} from {old_param_key} with scaling {scaling_factor}")
                                 else:
-                                    print(f"    Warning: Shape mismatch for seeding {new_param_key} from {old_param_key}. Old: {old_param_data.shape}, New: {new_param_data_target.shape}. Using default initialization for this param.")
+                                    logger.warning(f"    Shape mismatch for seeding {new_param_key} from {old_param_key}. Old: {old_param_data.shape}, New: {new_param_data_target.shape}. Using default initialization for this param.")
                             else:
                                 missing_keys_info = []
                                 if old_param_key not in previous_model_state_dict:
                                     missing_keys_info.append(f"old key '{old_param_key}' missing")
                                 if new_param_key not in current_new_model_state_dict_on_cpu:
                                     missing_keys_info.append(f"new key '{new_param_key}' missing")
-                                print(f"    Warning: Could not seed parameter for suffix '{param_suffix}' ({', '.join(missing_keys_info)}). Using default initialization for this param in new layer {new_layer_idx}.")
+                                logger.warning(f"    Could not seed parameter for suffix '{param_suffix}' ({', '.join(missing_keys_info)}). Using default initialization for this param in new layer {new_layer_idx}.")
                 else:
-                    print("  Skipping seeding new layers as previous model had no layers (old_n_layers == 0). New layers will use default initialization.")
+                    logger.info("  Skipping seeding new layers as previous model had no layers (old_n_layers == 0). New layers will use default initialization.")
             elif previous_model_config and self.n_layers <= previous_model_config.get('n_layers', 0) :
-                 print("Info: New model does not have more layers than previous. No layer seeding needed.")
+                 logger.info("New model does not have more layers than previous. No layer seeding needed.")
 
         self.to(self.device)
         self._try_load_latest_checkpoint()
-
     def recalculate_configuration_id(self):
         config_params_str = (
             f"v{self.vocab_size}_l{self.n_layers}_h{self.n_heads}_"
@@ -175,7 +193,7 @@ class PythonMasterAI(nn.Module):
             f"a{self.activation}"
         )
         self.configuration_id = hashlib.sha1(config_params_str.encode(), usedforsecurity=False).hexdigest()[:12]
-        print(f"Recalculated Configuration ID: {self.configuration_id}")
+        logger.info(f"Recalculated Configuration ID: {self.configuration_id}")
 
     def forward(self, x, src_key_padding_mask=None):
         embedded_src = self.embed(x)
@@ -216,32 +234,39 @@ class PythonMasterAI(nn.Module):
         return generated_ids
 
     def generate_for_evaluation(self, prompt_text: str, task_type: str,
-                                context_code: str = None, max_gen_length: int = 150) -> str:
+                                context_code: Optional[str] = None, max_gen_length: int = 150) -> str: # Allow context_code to be Optional
         self.eval()
-        full_prompt = prompt_text
+
+        # Ensure prompt_text used in f-strings is a string, defaulting to empty if None was passed
+        # (though current type hint is str, this makes it robust if None slips through or if hint changes)
+        _prompt_text_str = prompt_text if prompt_text is not None else ""
+
+        # context_code is already Optional[str], f-strings will convert None to "None" string
+
         if task_type == "code_explanation":
             if context_code:
-                full_prompt = f"You are PythonMasterAI. Explain the following Python code based on the request.\n\nCode:\n```python\n{context_code}\n```\n\nRequest: {prompt_text}\n\nExplanation:"
+                full_prompt = f"You are PythonMasterAI. Explain the following Python code based on the request.\n\nCode:\n```python\n{context_code}\n```\n\nRequest: {_prompt_text_str}\n\nExplanation:"
             else:
-                full_prompt = f"You are PythonMasterAI. Provide an explanation for the following concept/request: {prompt_text}\n\nExplanation:"
+                full_prompt = f"You are PythonMasterAI. Provide an explanation for the following concept/request: {_prompt_text_str}\n\nExplanation:"
         elif task_type == "docstring_generation":
             if context_code:
-                full_prompt = f"You are PythonMasterAI. Generate a Python docstring for the following function. {prompt_text}\n\nFunction:\n```python\n{context_code}\n```\n\nDocstring:"
+                full_prompt = f"You are PythonMasterAI. Generate a Python docstring for the following function. {_prompt_text_str}\n\nFunction:\n```python\n{context_code}\n```\n\nDocstring:"
             else:
-                full_prompt = f"You are PythonMasterAI. Generate a Python docstring based on the following description: {prompt_text}\n\nDocstring:"
+                full_prompt = f"You are PythonMasterAI. Generate a Python docstring based on the following description: {_prompt_text_str}\n\nDocstring:"
         elif task_type == "code_generation":
-            full_prompt = f"You are PythonMasterAI. Generate Python code for the following request: {prompt_text}\n\nCode:"
+            full_prompt = f"You are PythonMasterAI. Generate Python code for the following request: {_prompt_text_str}\n\nCode:"
         elif task_type == "concept_explanation":
-            full_prompt = f"You are PythonMasterAI. Explain the following Python concept: {prompt_text}\n\nExplanation:"
+            full_prompt = f"You are PythonMasterAI. Explain the following Python concept: {_prompt_text_str}\n\nExplanation:"
         else:
-            full_prompt = f"You are PythonMasterAI. Respond to the following: {prompt_text}"
+            full_prompt = f"You are PythonMasterAI. Respond to the following: {_prompt_text_str}"
+
         tokenizer_max_input_len = 512
         inputs = self.tokenizer(full_prompt, return_tensors="pt", padding="max_length", truncation=True, max_length=tokenizer_max_input_len)
         input_ids = inputs.input_ids.to(self.device)
         attention_mask = inputs.attention_mask.to(self.device)
         eos_token_id_to_use = self.tokenizer.eos_token_id
         if eos_token_id_to_use is None:
-            print("Warning: Tokenizer does not have a default eos_token_id. Generation might run to max_gen_length.")
+            logger.warning("Tokenizer does not have a default eos_token_id. Generation might run to max_gen_length.")
         output_ids = self.generate(
             input_ids,
             attention_mask,
@@ -251,7 +276,7 @@ class PythonMasterAI(nn.Module):
             top_k=50
         )
         generated_token_ids = output_ids[0, input_ids.size(1):]
-        generated_text = self.tokenizer.decode(generated_token_ids, skip_special_tokens=True)
+        generated_text = self.tokenizer.decode(cast(torch.Tensor, generated_token_ids), skip_special_tokens=True) # type: ignore
         return generated_text.strip()
 
     def log_performance(self, metric, value):
@@ -309,7 +334,7 @@ class PythonMasterAI(nn.Module):
             self.stage = "toddler"
         if old_stage != self.stage:
             print(f"Promoted to {self.stage.capitalize()} with {params:,} parameters!")
-            self.task_progress = defaultdict(int)
+            self.task_progress = defaultdict(float) # Changed from int to float
             self.knowledge_gaps = []
             with open("task_progress.json", "w") as f:
                 json.dump({}, f)
@@ -324,7 +349,12 @@ class PythonMasterAI(nn.Module):
 
     def log_task_progress(self, task, success=True):
         if task in self.growth_tasks[self.stage]:
-            self.task_progress[task] += 1 if success else 0
+            if task == "unit_test_accuracy": # Special handling if it's a direct value not a counter
+                # This assumes unit_test_accuracy is set directly, not incremented.
+                # If it were to be averaged or set, that logic would be elsewhere.
+                pass # For now, let's assume it's set elsewhere or not incremented here.
+            else:
+                self.task_progress[task] += 1.0 if success else 0.0 # Ensure float arithmetic
             with open("task_progress.json", "w") as f:
                 json.dump(dict(self.task_progress), f)
 
@@ -342,7 +372,7 @@ class PythonMasterAI(nn.Module):
                 gap = f"{topic.group(2)} {task.split('_')[-1]}"
                 if gap not in self.knowledge_gaps:
                     self.knowledge_gaps.append(gap)
-                    print(f"Gap identified: {gap}")
+                    logger.info(f"Gap identified: {gap}")
 
     def formulate_research_queries(self):
         queries = []
@@ -375,7 +405,7 @@ class PythonMasterAI(nn.Module):
             response.raise_for_status()
             return response.json()
         except requests.RequestException as e:
-            print(f"Warning: Error fetching GitHub repo details for {api_url_to_use}: {e}")
+            logger.warning(f"Error fetching GitHub repo details for {api_url_to_use}: {e}")
             return None
 
     def _fetch_pypi_package_info(self, package_name_or_url):
@@ -398,7 +428,7 @@ class PythonMasterAI(nn.Module):
             response.raise_for_status()
             return response.json()
         except requests.RequestException as e:
-            print(f"Warning: Error fetching PyPI package info for {package_name}: {e}")
+            logger.warning(f"Error fetching PyPI package info for {package_name}: {e}")
             return None
 
     def select_research_sources(self, query):
@@ -429,13 +459,13 @@ class PythonMasterAI(nn.Module):
                 if src_name in self.known_sources and self.known_sources[src_name]:
                     scrape_targets_dict[src_name] = self.known_sources[src_name][0]
                 else:
-                    print(f"Warning: Source '{src_name}' for query '{query}' not in known_sources or has no URL for research.")
+                    logger.warning(f"Source '{src_name}' for query '{query}' not in known_sources or has no URL for research.")
         return list(scrape_targets_dict.items())
 
     def process_scraped_research_data(self, stage):
         queries = self.formulate_research_queries()
         if not queries:
-            print("No active research queries to process post-scraping.")
+            logger.info("No active research queries to process post-scraping.")
             return
         query_resolution_map = {query: False for query in queries}
         all_relevant_sources_for_queries = set()
@@ -444,7 +474,7 @@ class PythonMasterAI(nn.Module):
         for source_name in all_relevant_sources_for_queries:
             latest_dataset_dir = self.get_latest_dataset_path(stage)
             if not latest_dataset_dir:
-                print(f"Warning: Cannot process research data for stage '{stage}' as no latest dataset directory found.")
+                logger.warning(f"Cannot process research data for stage '{stage}' as no latest dataset directory found.")
                 return
             file_path = os.path.join(latest_dataset_dir, f"{source_name}.txt")
 
@@ -465,7 +495,7 @@ class PythonMasterAI(nn.Module):
                 for query in queries:
                     if source_name in self.select_research_sources(query) and not query_resolution_map[query]:
                         self.log_research(query, [source_name], success=False, note="Scraped file not found")
-                        print(f"Warning: Scraped file {file_path} not found for source {source_name} relevant to query '{query}'.")
+                        logger.warning(f"Scraped file {file_path} not found for source {source_name} relevant to query '{query}'.")
         resolved_gaps_this_cycle = set()
         for query, resolved in query_resolution_map.items():
             if resolved:
@@ -473,18 +503,18 @@ class PythonMasterAI(nn.Module):
                     if gap_text.lower() in query.lower():
                         resolved_gaps_this_cycle.add(gap_text)
         if resolved_gaps_this_cycle:
-            print(f"Knowledge gaps resolved this cycle: {resolved_gaps_this_cycle}")
+            logger.info(f"Knowledge gaps resolved this cycle: {resolved_gaps_this_cycle}")
             self.knowledge_gaps = [gap for gap in self.knowledge_gaps if gap not in resolved_gaps_this_cycle]
         if queries and not self.knowledge_gaps:
-            print("All knowledge gaps from this research cycle appear to be resolved.")
+            logger.info("All knowledge gaps from this research cycle appear to be resolved.")
         elif queries:
-            print(f"Remaining knowledge gaps after research: {self.knowledge_gaps}")
+            logger.info(f"Remaining knowledge gaps after research: {self.knowledge_gaps}")
 
     def conduct_research(self):
-        print("Conduct_research called. Identifying targets...")
+        logger.info("Conduct_research called. Identifying targets...")
         research_targets = self.get_research_scrape_targets()
         if research_targets:
-            print(f"Conduct_research initiating focused scraping for targets: {research_targets}")
+            logger.info(f"Conduct_research initiating focused scraping for targets: {research_targets}")
             from scrape_data import scrape_data
             sources_to_scrape, urls_to_scrape = zip(*research_targets)
             scrape_data(self.stage, list(sources_to_scrape), list(urls_to_scrape))
@@ -506,7 +536,7 @@ class PythonMasterAI(nn.Module):
                     self.log_task_progress("find_sources")
                 else:
                     self.log_source(source, url, score, added=False)
-        print(f"Discovered sources: {new_sources}")
+        logger.info(f"Discovered sources: {new_sources}")
         return new_sources
 
     def search_for_sources(self, query):
@@ -578,7 +608,7 @@ class PythonMasterAI(nn.Module):
                 else:
                     freshness_score = 0.05
             except ValueError:
-                print(f"Warning: Could not parse GitHub date: {last_push_date_str}")
+                logger.warning(f"Could not parse GitHub date: {last_push_date_str}")
         elif pypi_details and 'releases' in pypi_details and pypi_details['releases']:
             latest_version_str = pypi_details.get('info', {}).get('version')
             if latest_version_str and latest_version_str in pypi_details['releases']:
@@ -596,9 +626,9 @@ class PythonMasterAI(nn.Module):
                         else:
                             freshness_score = 0.1
                     except ValueError:
-                        print(f"Warning: Could not parse PyPI date: {latest_upload_time_str}")
+                        logger.warning(f"Could not parse PyPI date: {latest_upload_time_str}")
         total_score = relevance_score + authority_score + freshness_score
-        print(f"Debug: Evaluated '{source_name}' ({url}) for query '{query}': R={relevance_score:.2f}, A={authority_score:.2f}, F={freshness_score:.2f} -> Total={total_score:.2f}")
+        logger.debug(f"Evaluated '{source_name}' ({url}) for query '{query}': R={relevance_score:.2f}, A={authority_score:.2f}, F={freshness_score:.2f} -> Total={total_score:.2f}")
         return min(total_score, 1.0)
 
     def prioritize_scraping(self):
@@ -638,15 +668,15 @@ class PythonMasterAI(nn.Module):
         return f"{self.stage.capitalize()} AI: {general_response}"
 
     def generate_code(self, input_text):
-        print("Warning: generate_code() is deprecated. Use generate_for_evaluation() with task_type='code_generation'.")
+        logger.warning("generate_code() is deprecated. Use generate_for_evaluation() with task_type='code_generation'.")
         return self.generate_for_evaluation(input_text, "code_generation", max_gen_length=200)
 
     def generate_explanation(self, input_text):
-        print("Warning: generate_explanation() is deprecated. Use generate_for_evaluation() with task_type='concept_explanation'.")
+        logger.warning("generate_explanation() is deprecated. Use generate_for_evaluation() with task_type='concept_explanation'.")
         return self.generate_for_evaluation(input_text, "concept_explanation", max_gen_length=150)
 
     def debug_code(self, input_text):
-        print("Warning: debug_code() is deprecated and not fully implemented in generate_for_evaluation.")
+        logger.warning("debug_code() is deprecated and not fully implemented in generate_for_evaluation.")
         return self.generate_for_evaluation(input_text, "debug_code_placeholder", max_gen_length=100)
 
     def process_input(self, input_text, user_key):
@@ -660,8 +690,8 @@ class PythonMasterAI(nn.Module):
         return self.generate_response(input_text)
 
     def reset_to_checkpoint(self):
-        print("Reverting to checkpoint")
-        self.task_progress = defaultdict(int)
+        logger.info("Reverting to checkpoint")
+        self.task_progress = defaultdict(float) # Changed to float for consistency
         self.knowledge_gaps = []
 
     def get_status(self):
@@ -673,23 +703,23 @@ class PythonMasterAI(nn.Module):
         return {"stage": self.stage, "task_progress": dict(self.task_progress), "knowledge_gaps": list(self.knowledge_gaps), "known_sources": self.known_sources, "configuration_id": self.configuration_id, "vocab_size": self.vocab_size, "n_layers": self.n_layers, "n_heads": self.n_heads, "hidden_size": self.hidden_size, "dropout": self.dropout, "dim_feedforward": self.dim_feedforward, "activation": self.activation, "performance_log": self.performance_log, "research_log": self.research_log, "source_log": self.source_log, "current_dataset_version": self.current_dataset_version}
 
     def load_checkpoint(self, filepath, optimizer=None):
-        print(f"Attempting to load checkpoint from: {filepath}")
+        logger.info(f"Attempting to load checkpoint from: {filepath}")
         try:
             # Bandit B614: Ensure checkpoints are loaded only from trusted sources.
             checkpoint = torch.load(filepath, map_location=self.device)
         except FileNotFoundError:
-            print(f"Checkpoint file not found: {filepath}")
+            logger.warning(f"Checkpoint file not found: {filepath}")
             return False
         except Exception as e:
-            print(f"Error loading checkpoint file {filepath}: {e}")
+            logger.error(f"Error loading checkpoint file {filepath}: {e}", exc_info=True)
             return False
         ckpt_ai_state = checkpoint.get('ai_state')
         if not ckpt_ai_state:
-            print("Error: Checkpoint is missing 'ai_state'. Cannot verify configuration or load.")
+            logger.error("Checkpoint is missing 'ai_state'. Cannot verify configuration or load.")
             return False
         ckpt_config_id = ckpt_ai_state.get('configuration_id')
         if self.configuration_id != ckpt_config_id:
-            print(f"ERROR: Configuration ID mismatch! Model: '{self.configuration_id}', Checkpoint: '{ckpt_config_id}'. Aborting load.")
+            logger.error(f"Configuration ID mismatch! Model: '{self.configuration_id}', Checkpoint: '{ckpt_config_id}'. Aborting load.")
             return False
         params_to_check = ['vocab_size', 'n_layers', 'n_heads', 'hidden_size', 'dropout', 'dim_feedforward', 'activation']
         config_mismatch = False
@@ -697,28 +727,28 @@ class PythonMasterAI(nn.Module):
             model_param_val = getattr(self, param)
             ckpt_param_val = ckpt_ai_state.get(param)
             if model_param_val != ckpt_param_val:
-                print(f"ERROR: Parameter mismatch for '{param}'. Model: {model_param_val}, Checkpoint: {ckpt_param_val}.")
+                logger.error(f"Parameter mismatch for '{param}'. Model: {model_param_val}, Checkpoint: {ckpt_param_val}.")
                 config_mismatch = True
         if config_mismatch:
-            print("Aborting checkpoint loading due to model parameter mismatch.")
+            logger.error("Aborting checkpoint loading due to model parameter mismatch.")
             return False # Indent this return to be part of the if block
 
         # This block executes if config_mismatch is False
-        print("Checkpoint configuration matches model configuration.") # De-indent this line
+        logger.info("Checkpoint configuration matches model configuration.")
         try: # De-indent try block
             self.load_state_dict(checkpoint['model_state_dict'])
-            print("Model state_dict loaded successfully.") # Indent this print into the try block
+            logger.info("Model state_dict loaded successfully.")
         except Exception as e: # De-indent except block
-            print(f"Error loading model state_dict: {e}")
+            logger.error(f"Error loading model state_dict: {e}", exc_info=True)
             return False
         if optimizer and 'optimizer_state_dict' in checkpoint:
             try:
                 optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                print("Optimizer state_dict loaded successfully.")
+                logger.info("Optimizer state_dict loaded successfully.")
             except Exception as e:
-                print(f"Error loading optimizer state_dict: {e}")
+                logger.error(f"Error loading optimizer state_dict: {e}", exc_info=True)
         self.stage = ckpt_ai_state.get('stage', self.stage)
-        self.task_progress = defaultdict(int, ckpt_ai_state.get('task_progress', {}))
+        self.task_progress = defaultdict(float, ckpt_ai_state.get('task_progress', {})) # Changed from int to float
         self.knowledge_gaps = ckpt_ai_state.get('knowledge_gaps', [])
         self.known_sources = ckpt_ai_state.get('known_sources', self.load_known_sources())
         self.performance_log = ckpt_ai_state.get('performance_log', [])
@@ -726,7 +756,7 @@ class PythonMasterAI(nn.Module):
         self.source_log = ckpt_ai_state.get('source_log', [])
         self.current_dataset_version = ckpt_ai_state.get('current_dataset_version', None)
         loaded_epoch = checkpoint.get('epoch', 'N/A')
-        print(f"Checkpoint loaded successfully. Resuming at stage '{self.stage}', epoch {loaded_epoch}, dataset version '{self.current_dataset_version}'.")
+        logger.info(f"Checkpoint loaded successfully. Resuming at stage '{self.stage}', epoch {loaded_epoch}, dataset version '{self.current_dataset_version}'.")
         return True
 
     def _try_load_latest_checkpoint(self):
@@ -735,7 +765,7 @@ class PythonMasterAI(nn.Module):
         status_message = ""
         if not os.path.exists(checkpoint_dir_from_config):
             status_message = f"Checkpoint directory '{checkpoint_dir_from_config}' not found. Model will start fresh."
-            print(status_message)
+            logger.info(status_message)
             return status_message
 
         # --- Attempt 1: Load the specific '_latest.pt' file ---
@@ -750,19 +780,19 @@ class PythonMasterAI(nn.Module):
 
         if os.path.exists(latest_checkpoint_filepath):
             tried_primary = True
-            print(f"Primary checkpoint target found: {latest_checkpoint_filepath}. Attempting to load.")
+            logger.info(f"Primary checkpoint target found: {latest_checkpoint_filepath}. Attempting to load.")
             if self.load_checkpoint(latest_checkpoint_filepath):
                 status_message = f"Successfully loaded primary checkpoint: {latest_checkpoint_filepath} (Stage: {self.stage}, Config: {self.configuration_id})."
-                print(status_message)
+                logger.info(status_message)
                 return status_message
             else: # Add an explicit else block
                 primary_failed_to_load = True
-                print(f"Found primary checkpoint {latest_checkpoint_filepath}, but failed to load. Will check for alternatives.")
+                logger.warning(f"Found primary checkpoint {latest_checkpoint_filepath}, but failed to load. Will check for alternatives.")
         else:
-            print(f"Primary checkpoint '{latest_checkpoint_filepath}' not found. Searching for alternatives.")
+            logger.info(f"Primary checkpoint '{latest_checkpoint_filepath}' not found. Searching for alternatives.")
         # --- Attempt 2: If '_latest.pt' not found or failed to load, use glob to find other epoch checkpoints ---
         glob_pattern = os.path.join(checkpoint_dir_from_config, f"model_stage_{self.stage}_config_{self.configuration_id}_epoch_*.pt")
-        print(f"Searching for alternative epoch-based checkpoints with pattern: {glob_pattern}")
+        logger.info(f"Searching for alternative epoch-based checkpoints with pattern: {glob_pattern}")
 
         epoch_checkpoints = []
         for f_path in glob.glob(glob_pattern): # glob is imported at the top
@@ -775,33 +805,32 @@ class PythonMasterAI(nn.Module):
         if epoch_checkpoints:
             epoch_checkpoints.sort(key=lambda x: x[0], reverse=True)
             best_alternative_filepath = epoch_checkpoints[0][1]
-            print(f"Found alternative epoch-based checkpoints. Highest epoch version is: {best_alternative_filepath}")
+            logger.info(f"Found alternative epoch-based checkpoints. Highest epoch version is: {best_alternative_filepath}")
 
             if self.load_checkpoint(best_alternative_filepath):
                 if tried_primary and primary_failed_to_load:
                      status_message = f"Primary checkpoint {latest_checkpoint_filepath} failed. Successfully loaded alternative: {best_alternative_filepath} (Stage: {self.stage}, Config: {self.configuration_id})."
                 else: # Primary was not found
                      status_message = f"Primary checkpoint not found. Successfully loaded alternative: {best_alternative_filepath} (Stage: {self.stage}, Config: {self.configuration_id})."
-                print(status_message)
+                logger.info(status_message)
                 return status_message
             else: # Alternative also failed
                 if tried_primary and primary_failed_to_load:
                     status_message = f"Primary checkpoint {latest_checkpoint_filepath} failed. Alternative {best_alternative_filepath} also failed. Model starts fresh."
                 else: # Primary not found, and alternative failed
                     status_message = f"Primary checkpoint not found. Alternative {best_alternative_filepath} also failed. Model starts fresh."
-                print(status_message)
+                logger.warning(status_message)
                 return status_message
         else: # No alternative epoch checkpoints found by glob
             if tried_primary and primary_failed_to_load:
                 status_message = f"Primary checkpoint {latest_checkpoint_filepath} failed. No other alternatives found. Model starts fresh."
             else: # Primary not found, and no alternatives by glob
                 status_message = f"No suitable checkpoints found for stage '{self.stage}' and config '{self.configuration_id}'. Model starts fresh."
-            print(status_message)
+            logger.info(status_message)
             return status_message
 
     def get_config_dict(self):
         return {'vocab_size': self.vocab_size, 'n_layers': self.n_layers, 'n_heads': self.n_heads, 'hidden_size': self.hidden_size, 'dropout': self.dropout, 'dim_feedforward': self.dim_feedforward, 'activation': self.activation, 'configuration_id': self.configuration_id}
-
     def get_latest_dataset_path(self, stage: str) -> str | None:
         stage_data_dir = os.path.join("data", stage)
         latest_txt_path = os.path.join(stage_data_dir, "latest.txt")
@@ -811,18 +840,18 @@ class PythonMasterAI(nn.Module):
             with open(latest_txt_path, "r") as f:
                 version_timestamp = f.read().strip()
         except FileNotFoundError:
-            print(f"Info: 'latest.txt' not found in {stage_data_dir}. No dataset version specified.")
+            logger.info(f"'latest.txt' not found in {stage_data_dir}. No dataset version specified.")
             return None
         except Exception as e:
-            print(f"Error reading 'latest.txt' in {stage_data_dir}: {e}")
+            logger.error(f"Error reading 'latest.txt' in {stage_data_dir}: {e}", exc_info=True)
             return None # Return None if there was an error reading the file
 
         if not version_timestamp:
-            print(f"Info: 'latest.txt' in {stage_data_dir} is empty. No dataset version specified.")
+            logger.info(f"'latest.txt' in {stage_data_dir} is empty. No dataset version specified.")
             return None
 
         dataset_path = os.path.join(stage_data_dir, version_timestamp)
         if not os.path.isdir(dataset_path):
-            print(f"Error: Dataset directory '{dataset_path}' (specified in latest.txt) does not exist.")
+            logger.error(f"Dataset directory '{dataset_path}' (specified in latest.txt) does not exist.")
             return None
         return dataset_path
