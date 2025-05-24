@@ -562,7 +562,7 @@ class PythonMasterAI(nn.Module):
                 if release_dates:
                     latest_upload_time_str = max(release_dates)
                     try:
-                        upload_dt = datetime.fromisoformat(latest_upload_time_str.replace('Z', '+00:00'));
+                        upload_dt = datetime.fromisoformat(latest_upload_time_str.replace('Z', '+00:00'))
                         upload_ts = upload_dt.timestamp()
                         age_days = (current_time_ts - upload_ts) / (60 * 60 * 24)
                         if age_days <= 90:
@@ -676,11 +676,14 @@ class PythonMasterAI(nn.Module):
                 config_mismatch = True
         if config_mismatch:
             print("Aborting checkpoint loading due to model parameter mismatch.")
-        return False
-        print("Checkpoint configuration matches model configuration.")
-            try: self.load_state_dict(checkpoint['model_state_dict'])
-            print("Model state_dict loaded successfully.")
-        except Exception as e:
+            return False # Indent this return to be part of the if block
+
+        # This block executes if config_mismatch is False
+        print("Checkpoint configuration matches model configuration.") # De-indent this line
+        try: # De-indent try block
+            self.load_state_dict(checkpoint['model_state_dict'])
+            print("Model state_dict loaded successfully.") # Indent this print into the try block
+        except Exception as e: # De-indent except block
             print(f"Error loading model state_dict: {e}")
             return False
         if optimizer and 'optimizer_state_dict' in checkpoint:
@@ -727,11 +730,11 @@ class PythonMasterAI(nn.Module):
                 status_message = f"Successfully loaded primary checkpoint: {latest_checkpoint_filepath} (Stage: {self.stage}, Config: {self.configuration_id})."
                 print(status_message)
                 return status_message
+            else: # Add an explicit else block
                 primary_failed_to_load = True
                 print(f"Found primary checkpoint {latest_checkpoint_filepath}, but failed to load. Will check for alternatives.")
         else:
             print(f"Primary checkpoint '{latest_checkpoint_filepath}' not found. Searching for alternatives.")
-
         # --- Attempt 2: If '_latest.pt' not found or failed to load, use glob to find other epoch checkpoints ---
         glob_pattern = os.path.join(checkpoint_dir_from_config, f"model_stage_{self.stage}_config_{self.configuration_id}_epoch_*.pt")
         print(f"Searching for alternative epoch-based checkpoints with pattern: {glob_pattern}")

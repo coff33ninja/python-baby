@@ -384,8 +384,8 @@ def get_dataset_versions(stage_name: str):
                             manifest_data = json.load(f_manifest)
                     except Exception as e:
                         manifest_data = {"error": f"Could not read manifest: {e}"}
-                    logger.error(f"Error reading manifest {manifest_path}: {e}", exc_info=True)
-                try:
+                        logger.error(f"Error reading manifest {manifest_path}: {e}", exc_info=True)
+                try:# Try to get the number of txt files in the version
                     txt_files = [f for f in os.listdir(version_path) if f.endswith(".txt") and f != "manifest.json"]
                     num_txt_files = len(txt_files)
                 except Exception as e:
