@@ -54,7 +54,7 @@ def _get_typed_config_value(key: str, default_value: _T_HELPER, target_type: Typ
 # --- Secure Code Execution Target Function (for multiprocessing) ---
 def _execute_restricted_code_target(
     code_string: str, tests_string: str, result_queue: multiprocessing.Queue
-):
+): # pragma: no cover
     restricted_globals = dict(safe_globals)
     _print_collector_instance = PrintCollector()
     restricted_globals["_print_"] = _print_collector_instance # type: ignore[assignment]
