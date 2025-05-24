@@ -6,6 +6,9 @@ import logging.handlers  # Added for logging
 
 CONFIG_FILE_PATH = "config.yaml"
 _config_cache = None
+# Initialize logger at module level for use in load_config
+logger = logging.getLogger(__name__)
+
 
 
 def load_config():
@@ -16,25 +19,23 @@ def load_config():
                 with open(CONFIG_FILE_PATH, "r") as f:
                     _config_cache = yaml.safe_load(f)
                     if _config_cache is None:
-                        _config_cache = {}
-                        # Use basic print here as logger might not be set up when this first runs
-                        print(
+                        _config_cache = {} # Ensure it's a dict even if empty
+                        logger.warning( # Changed from print
                             f"Warning: Configuration file {CONFIG_FILE_PATH} is empty. Using defaults where applicable."
                         )
                     # else:
                     # print(f"Loaded configuration from {CONFIG_FILE_PATH}") # This will be logged by setup_logging
             except yaml.YAMLError as e:
-                print(
+                logger.error( # Changed from print
                     f"Error parsing YAML configuration file {CONFIG_FILE_PATH}: {e}. Using defaults where applicable."
                 )
                 _config_cache = {}
         else:
-            print(
+            logger.warning( # Changed from print
                 f"Warning: Configuration file {CONFIG_FILE_PATH} not found. Using defaults where applicable."
             )
             _config_cache = {}
     return _config_cache
-
 
 def get_config_value(key_path: str, default=None):
     config = load_config()
