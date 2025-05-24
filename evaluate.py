@@ -30,7 +30,8 @@ def _execute_restricted_code_target(
     code_string: str, tests_string: str, result_queue: multiprocessing.Queue
 ):
     restricted_globals = dict(safe_globals)
-    restricted_globals["_print_"] = PrintCollector() # Instantiate PrintCollector
+    _print_collector_instance = PrintCollector() # Instantiate PrintCollector
+    restricted_globals["_print_"] = _print_collector_instance
     restricted_globals["_getattr_"] = getattr
     restricted_globals["_getitem_"] = lambda obj, index: obj[index]
     restricted_globals["_write_"] = lambda x: x
@@ -81,7 +82,7 @@ def _execute_restricted_code_target(
         sys.stdout = old_stdout
         sys.stderr = old_stderr
         results["stdout"] = (
-            restricted_globals["_print_"].collected_output()
+            _print_collector_instance.collected_output() # Use the instance here
             + redirected_stdout_exec.getvalue()
         )
         err_val = redirected_stderr_exec.getvalue()
