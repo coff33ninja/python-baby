@@ -14,10 +14,7 @@ from utils import get_config_value, setup_logging # Added for config and logging
 # --- Setup Logging ---
 # Call setup_logging early, using config values.
 # It's okay if utils.py's initial load_config prints a warning before this is fully set.
-log_f = get_config_value('logging.log_file', "project_ai_gui.log") # Default log file for GUI
-cl_level_str = get_config_value('logging.console_level', "INFO")
-fl_level_str = get_config_value('logging.file_level', "DEBUG")
-setup_logging(cl_level_str, fl_level_str, log_f)
+setup_logging()  # Removed arguments since setup_logging does not accept any.
 
 # --- Initialize logger for this module ---
 logger = logging.getLogger(__name__)
@@ -444,13 +441,35 @@ def get_file_content_gui(stage_name: str, version_timestamp: str, filename: str)
         logger.warning(f"File not found for content preview: {file_path}")
         return f"Error: File not found: {file_path}"
     try:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            content_lines = []; total_bytes = 0; max_bytes = 1024 * 1024; max_lines = 200
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f: # type: ignore # errors='ignore' for robustness
+            content_lines = []
+            total_bytes = 0
+
+            # Get truncation limits from config, with defaults
+            default_max_bytes = 1024 * 1024  # 1MB
+            default_max_lines = 200
+            max_bytes_limit = get_config_value("gui_settings.file_preview.max_bytes", default_max_bytes)
+            max_lines_limit = get_config_value("gui_settings.file_preview.max_lines", default_max_lines)
+
             for i, line in enumerate(f):
-                if i >= max_lines: content_lines.append("...\n[Preview truncated: Too many lines]"); break
+                if i >= max_lines_limit:
+                    content_lines.append(f"...\n[Preview truncated: Max lines ({max_lines_limit}) reached]")
+                    break
                 line_bytes = len(line.encode('utf-8'))
-                if total_bytes + line_bytes > max_bytes: content_lines.append("...\n[Preview truncated: File size limit reached]"); break
-                content_lines.append(line); total_bytes += line_bytes
+                # Check if adding this line would exceed the byte limit
+                # Ensure at least one line is processed if it's huge, unless it's the very first line and it alone exceeds.
+                if total_bytes + line_bytes > max_bytes_limit and i > 0 : # If not the first line and adding it exceeds
+                    content_lines.append(f"...\n[Preview truncated: Max bytes ({max_bytes_limit}) reached before this line]")
+                    break
+                content_lines.append(line)
+                total_bytes += line_bytes
+                if total_bytes > max_bytes_limit and i == 0: # If the very first line itself is too big
+                    content_lines[-1] = content_lines[-1][:max_bytes_limit] # Approximate truncation
+                    content_lines.append(f"...\n[Preview truncated: First line exceeded max bytes ({max_bytes_limit})]")
+                    break
+                elif total_bytes > max_bytes_limit: # If accumulated size exceeds after adding current line
+                    content_lines.append(f"...\n[Preview truncated: Max bytes ({max_bytes_limit}) reached]")
+                    break
             return "".join(content_lines)
     except Exception as e:
         logger.error(f"Error reading file {filename} for preview: {e}", exc_info=True)

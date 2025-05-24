@@ -36,3 +36,9 @@ logging:
   console_level: "INFO"     # Logging level for console output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   file_level: "DEBUG"       # Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   tensorboard_log_dir: "runs/python_master_ai_experiment" # For TensorBoard logging
+
+# In your config.yaml
+gui_settings:
+  file_preview:
+    max_bytes: 1048576  # Example: 1MB
+    max_lines: 200      # Example: 200 lines
