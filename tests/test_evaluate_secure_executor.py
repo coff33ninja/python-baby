@@ -1,5 +1,5 @@
 import pytest
-import time
+import time # pytest is now used for a marker
 import logging
 import sys
 import os
@@ -11,8 +11,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from evaluate import SecureExecutor  # Now it should be found
 
+# Get a logger for this test module
+test_logger = logging.getLogger(__name__)
 
+@pytest.mark.smoke
 def test_execute_simple_pass():
+    test_logger.info("Starting test_execute_simple_pass")
     code = "x = 10\ny = 20\nresult = x + y"
     tests = "assert result == 30, f'Expected 30, got {result}'"
     executor = SecureExecutor(
@@ -28,6 +32,7 @@ def test_execute_simple_pass():
         passed is True
     ), f"Test should pass. Log: {log}, Stdout: {stdout}, Stderr: {stderr}"
     assert "Execution completed" in log
+    test_logger.info("Finished test_execute_simple_pass")
 
 
 def test_execute_assertion_fail():
