@@ -58,8 +58,8 @@ def _execute_restricted_code_target(
             tests_string, filename="<test_code>", mode="exec"
         )
         local_scope = {}
-        exec(byte_code, restricted_globals, local_scope)
-        exec(test_byte_code, restricted_globals, local_scope)
+        exec(byte_code, restricted_globals, local_scope)  # nosec B102
+        exec(test_byte_code, restricted_globals, local_scope)  # nosec B102
         results["passed"] = True
         results["log"] = (
             "Execution completed. All assertions passed (if any within tests_string)."
@@ -215,6 +215,7 @@ def main():
 
     logger.info(f"Loading model from checkpoint: {args.model_checkpoint_path}")
     try:
+        # Bandit B614: Ensure checkpoints are loaded only from trusted sources.
         checkpoint = torch.load(
             args.model_checkpoint_path, map_location=torch.device("cpu")
         )
