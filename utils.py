@@ -1,5 +1,6 @@
 import yaml
 import os
+import sys
 import logging  # Added for logging
 import logging.handlers  # Added for logging
 
@@ -137,4 +138,3 @@ def setup_logging():
 # The first logger = logging.getLogger(__name__) in a script will get a basic logger if not configured.
 # The main scripts' call to setup_logging() will then properly configure it.
 # Adding import sys for StreamHandler
-import sys
