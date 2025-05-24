@@ -1,5 +1,6 @@
 # grow.py
 import torch
+import torch.nn as nn # Import nn for TransformerEncoderLayer
 from python_master_ai import PythonMasterAI
 import requests
 from torch.optim import Adam
@@ -35,16 +36,17 @@ def grow_model(current_model: PythonMasterAI):
         )
         response.raise_for_status()
         approval_data = response.json()
-        if approval_data.get("action") != "grow":
-            logger.warning("Master approval required, but 'grow' action not granted.")
-            return current_model, None
     except requests.exceptions.RequestException as e:
         logger.error(f"Network error during master approval: {e}", exc_info=True)
-        return current_model, None
+        raise  # Re-raise the network exception as expected by the test
     except Exception as e:
         logger.error(f"Error during master approval: {e}", exc_info=True)
-        return current_model, None
+        # For other errors (like non-200 status that raise_for_status might cause, or JSON decode errors)
+        raise Exception(f"Master approval failed: {e}") from e
 
+    if approval_data.get("action") != "grow":
+        logger.warning("Master approval required, but 'grow' action not granted by master service.")
+        raise Exception("Master approval required and action must be 'grow'.")
     logger.info("Master approval received. Proceeding with model growth...")
 
     # --- Determine New Configuration ---
