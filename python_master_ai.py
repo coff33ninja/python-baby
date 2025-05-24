@@ -131,9 +131,9 @@ class PythonMasterAI(nn.Module):
                                     print(f"    Warning: Shape mismatch for seeding {new_param_key} from {old_param_key}. Old: {old_param_data.shape}, New: {new_param_data_target.shape}. Using default initialization for this param.")
                             else:
                                 missing_keys_info = []
-                                if not (old_param_key in previous_model_state_dict):
+                                if old_param_key not in previous_model_state_dict:
                                     missing_keys_info.append(f"old key '{old_param_key}' missing")
-                                if not (new_param_key in current_new_model_state_dict_on_cpu):
+                                if new_param_key not in current_new_model_state_dict_on_cpu:
                                     missing_keys_info.append(f"new key '{new_param_key}' missing")
                                 print(f"    Warning: Could not seed parameter for suffix '{param_suffix}' ({', '.join(missing_keys_info)}). Using default initialization for this param in new layer {new_layer_idx}.")
                 else:
@@ -150,7 +150,7 @@ class PythonMasterAI(nn.Module):
             f"hs{self.hidden_size}_d{self.dropout}_df{self.dim_feedforward}_"
             f"a{self.activation}"
         )
-        self.configuration_id = hashlib.sha1(config_params_str.encode()).hexdigest()[:12]
+        self.configuration_id = hashlib.sha1(config_params_str.encode(), usedforsecurity=False).hexdigest()[:12]
         print(f"Recalculated Configuration ID: {self.configuration_id}")
 
     def forward(self, x, src_key_padding_mask=None):
@@ -651,6 +651,7 @@ class PythonMasterAI(nn.Module):
     def load_checkpoint(self, filepath, optimizer=None):
         print(f"Attempting to load checkpoint from: {filepath}")
         try:
+            # Bandit B614: Ensure checkpoints are loaded only from trusted sources.
             checkpoint = torch.load(filepath, map_location=self.device)
         except FileNotFoundError:
             print(f"Checkpoint file not found: {filepath}")
@@ -781,6 +782,7 @@ class PythonMasterAI(nn.Module):
         stage_data_dir = os.path.join("data", stage)
         latest_txt_path = os.path.join(stage_data_dir, "latest.txt")
         version_timestamp = None
+
         try:
             with open(latest_txt_path, "r") as f:
                 version_timestamp = f.read().strip()
@@ -789,12 +791,14 @@ class PythonMasterAI(nn.Module):
             return None
         except Exception as e:
             print(f"Error reading 'latest.txt' in {stage_data_dir}: {e}")
-        return None
+            return None # Return None if there was an error reading the file
+
         if not version_timestamp:
             print(f"Info: 'latest.txt' in {stage_data_dir} is empty. No dataset version specified.")
             return None
+
         dataset_path = os.path.join(stage_data_dir, version_timestamp)
         if not os.path.isdir(dataset_path):
             print(f"Error: Dataset directory '{dataset_path}' (specified in latest.txt) does not exist.")
-        return None
+            return None
         return dataset_path
