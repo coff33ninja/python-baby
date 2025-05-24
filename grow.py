@@ -1,6 +1,5 @@
 # grow.py
 import torch
-import torch.nn as nn # Import nn for TransformerEncoderLayer
 from python_master_ai import PythonMasterAI
 import requests
 from torch.optim import Adam

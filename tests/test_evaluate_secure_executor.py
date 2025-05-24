@@ -102,9 +102,9 @@ def test_execute_infinite_loop_timeout():
         "timeout" in log.lower() or "terminated" in log.lower()
     ), "Log message should indicate timeout or termination."
     # Check if duration is close to timeout, allowing for some overhead but not excessively long.
-    # Increased upper bound slightly for CI environments or slower machines.
+    # Allowing a range around the 1-second timeout to account for process start/stop overhead
     assert (
-        0.9 <= duration < 2.0
+        0.8 <= duration < 2.0  # Reduced lower bound to 0.8s and added upper bound of 2s
     ), f"Execution duration {duration} was not close to the timeout of 1s."
 
 

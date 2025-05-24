@@ -63,10 +63,9 @@ def test_grow_model_master_approval_network_failure(base_model):
     """Test grow_model when master auth call fails (network error)."""
     with patch.object(base_model, 'assess_performance', return_value={"needs_growth": True}):
         with patch('grow.requests.post', side_effect=requests.exceptions.ConnectionError("Network fail")) as mock_post:
-            initial_n_layers = base_model.n_layers
 
             with pytest.raises(requests.exceptions.ConnectionError, match="Network fail"):
-                grow_model(base_model)
+               grow_model(base_model)
 
             # Model should not have been modified if growth failed early
             mock_post.assert_called_once_with(
@@ -82,7 +81,6 @@ def test_grow_model_master_approval_denied_status_code(base_model):
 
     with patch.object(base_model, 'assess_performance', return_value={"needs_growth": True}):
         with patch('grow.requests.post', return_value=mock_response) as mock_post:
-            initial_n_layers = base_model.n_layers
 
             with pytest.raises(Exception, match="Master approval failed: 403 Client Error"):
                 grow_model(base_model)
@@ -98,7 +96,6 @@ def test_grow_model_master_approval_denied_action(base_model):
 
     with patch.object(base_model, 'assess_performance', return_value={"needs_growth": True}):
         with patch('grow.requests.post', return_value=mock_response) as mock_post:
-            initial_n_layers = base_model.n_layers
 
             with pytest.raises(Exception, match="Master approval required and action must be 'grow'\\."): # Match the new exception message
                 grow_model(base_model)
@@ -137,9 +134,9 @@ def test_grow_model_success_with_existing_layers(mock_update_stage_on_new_model,
                 assert torch.allclose(actual_tensor_in_new_layer, expected_tensor_after_scaling, atol=1e-7), \
                     f"Parameter {param_name} in new layer not scaled correctly."
 
-@patch('grow.nn.TransformerEncoderLayer', autospec=True)
+@patch('torch.nn.TransformerEncoderLayer', autospec=True) # Changed to patch in torch.nn
 @patch('python_master_ai.PythonMasterAI.update_stage')
-def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_new_model, mock_transformer_encoder_layer_constructor, base_model):
+def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_new_model, mock_torch_encoder_layer_constructor, base_model): # Renamed patch var
     """Test successful growth when encoder initially has no layers (testing the 'if old_layers:' branch)."""
     # Replace the ModuleList with a new empty one.
     # PyTorch's nn.Module handles reassignment of nn.Module attributes by updating _modules.
@@ -151,8 +148,8 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_
     # Configure the mock constructor to return an instance of our nn.Module mock
     # This instance will have its own 'parameters' MagicMock method.
     # This is the actual nn.Module instance that will be added to the model
-    actual_module_instance = MockEncoderLayerModule()
-    mock_transformer_encoder_layer_constructor.return_value = actual_module_instance
+    actual_module_instance = MockEncoderLayerModule() # Ensure you are using the correctly imported or defined mock class
+    mock_torch_encoder_layer_constructor.return_value = actual_module_instance # Renamed
 
     # We need to mock the 'parameters' *method* of this specific instance.
     # Create a MagicMock that will replace the 'parameters' method.
@@ -191,7 +188,7 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_
             expected_dropout = grown_model_instance.dropout
             expected_activation = grown_model_instance.activation
 
-            mock_transformer_encoder_layer_constructor.assert_called_once_with(
+            mock_torch_encoder_layer_constructor.assert_called_once_with( # Renamed
                 d_model=grown_model_instance.hidden_size,
                 nhead=grown_model_instance.n_heads,
                 dim_feedforward=expected_dim_feedforward,
@@ -199,7 +196,6 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_
                 activation=expected_activation,
                 batch_first=True
             )
-
             # The parameters method of the new layer (our mock) would be called by Adam optimizer,
             # so it should be called.
             mock_parameters_method.assert_called()
