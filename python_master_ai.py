@@ -597,9 +597,14 @@ class PythonMasterAI(nn.Module):
 
     def load_checkpoint(self, filepath, optimizer=None):
         print(f"Attempting to load checkpoint from: {filepath}")
-        try: checkpoint = torch.load(filepath, map_location=self.device)
-        except FileNotFoundError: print(f"Checkpoint file not found: {filepath}"); return False
-        except Exception as e: print(f"Error loading checkpoint file {filepath}: {e}"); return False
+        try:
+            checkpoint = torch.load(filepath, map_location=self.device)
+        except FileNotFoundError:
+            print(f"Checkpoint file not found: {filepath}")
+            return False
+        except Exception as e:
+            print(f"Error loading checkpoint file {filepath}: {e}")
+            return False
         ckpt_ai_state = checkpoint.get('ai_state')
         if not ckpt_ai_state: print("Error: Checkpoint is missing 'ai_state'. Cannot verify configuration or load."); return False
         ckpt_config_id = ckpt_ai_state.get('configuration_id')

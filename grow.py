@@ -153,7 +153,7 @@ if __name__ == "__main__":
                 ][task]
 
     logger.info(
-        f"\n--- Attempting to grow model (Master approval will be simulated via HTTP request to localhost:8000) ---"
+        "\n--- Attempting to grow model (Master approval will be simulated via HTTP request to localhost:8000) ---"
     )
     grown_model_instance, grown_optimizer = grow_model(base_model)
 

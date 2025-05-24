@@ -27,6 +27,7 @@ def mock_config_file(tmp_path):
         # Create dummy config
         dummy_config_path = tmp_path / "test_config.yaml"
         with open(dummy_config_path, "w") as f:
+            assert os.path.exists(os.path.dirname(dummy_config_path)), "Temp directory for mock config does not exist"
             f.write(content)
 
         # Override the global CONFIG_FILE_PATH in utils module
@@ -43,18 +44,26 @@ def mock_config_file(tmp_path):
 
 
 def test_load_valid_config(mock_config_file):
-    yaml_content = "{'model_defaults': {'n_layers': 3, 'activation': 'relu'}}"
-    # Using Python dict style for PyYAML safe_load, it handles it.
-    # More standard YAML would be: "model_defaults:\n  n_layers: 3\n  activation: relu"
-    # Forcing standard YAML for clarity
-    yaml_content_standard = "model_defaults:\n  n_layers: 3\n  activation: relu"
-    mock_config_file(yaml_content_standard)
+    # This is the variable that was flagged as unused on line 46.
+    # We will use it with yaml.safe_load() to create an expected dictionary.
+    # Note: PyYAML's safe_load is lenient and can parse this Python-like dict string.
+    yaml_content_from_diagnostic_line46 = "{'model_defaults': {'n_layers': 3, 'activation': 'relu'}}"
+
+    # For writing to the mock file, it's better to use standard YAML.
+    standard_yaml_to_write_to_file = "model_defaults:\n  n_layers: 3\n  activation: relu"
+    mock_config_file(standard_yaml_to_write_to_file)
 
     config = load_config()
     assert config is not None
     assert config["model_defaults"]["n_layers"] == 3
     assert config["model_defaults"]["activation"] == "relu"
 
+    # Use the 'yaml' import and the 'yaml_content_from_diagnostic_line46' variable
+    expected_config_dict_from_string = yaml.safe_load(yaml_content_from_diagnostic_line46)
+    assert config == expected_config_dict_from_string, \
+        f"Loaded config {config} did not match parsed yaml_content {expected_config_dict_from_string}"
+
+    # Original assertions using get_config_value remain useful
     assert get_config_value("model_defaults.n_layers") == 3
     assert get_config_value("model_defaults.activation") == "relu"
 
@@ -89,6 +98,7 @@ def test_config_file_not_found(caplog):  # caplog fixture to capture logs
     # For now, check if default value is returned and if a warning is in caplog.
 
     with caplog.at_level(logging.WARNING):
+        assert not os.path.exists(utils.CONFIG_FILE_PATH), "Test setup error: non_existent_config.yaml should not exist"
         assert (
             get_config_value("any.key", "default_val_for_not_found")
             == "default_val_for_not_found"
