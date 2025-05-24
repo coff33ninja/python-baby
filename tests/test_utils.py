@@ -215,7 +215,77 @@ def test_get_config_value_type_handling(mock_config_file):
     assert get_config_value("dict_val", {}) == {"subkey": "subvalue"}
     assert isinstance(get_config_value("dict_val"), dict)
     assert get_config_value("dict_val.subkey", "default") == "subvalue"
+    def test_load_config_with_valid_file(mock_config_file):
+        yaml_content = """
+        key1: value1
+        key2:
+          subkey1: subvalue1
+          subkey2: subvalue2
+        """
+        mock_config_file(yaml_content)
 
+        config = load_config()
+        assert config is not None
+        assert config["key1"] == "value1"
+        assert config["key2"]["subkey1"] == "subvalue1"
+        assert config["key2"]["subkey2"] == "subvalue2"
+
+
+    def test_load_config_with_empty_file(mock_config_file, caplog):
+        mock_config_file("")  # Empty content
+
+        with caplog.at_level(logging.WARNING):
+            config = load_config()
+            assert config == {}
+            assert "Configuration file" in caplog.text and "is empty" in caplog.text
+
+
+    def test_load_config_with_invalid_yaml(mock_config_file, caplog):
+        invalid_yaml_content = "key1: value1\nkey2: value2: invalid"
+        mock_config_file(invalid_yaml_content)
+
+        with caplog.at_level(logging.ERROR):
+            config = load_config()
+            assert config == {}
+            assert "Error parsing YAML configuration file" in caplog.text
+
+
+    def test_load_config_with_missing_file(caplog):
+
+        original_path = utils.CONFIG_FILE_PATH
+        utils.CONFIG_FILE_PATH = "non_existent_config.yaml"
+        utils._config_cache = None  # Reset cache
+
+        with caplog.at_level(logging.WARNING):
+            config = load_config()
+            assert config == {}
+            assert "Configuration file non_existent_config.yaml not found" in caplog.text
+
+        utils.CONFIG_FILE_PATH = original_path  # Restore
+
+
+    def test_load_config_caching(mock_config_file):
+
+        yaml_content = "key1: value1"
+        mock_config_file(yaml_content)
+
+        # First load
+        config1 = load_config()
+        assert config1["key1"] == "value1"
+        assert utils._config_cache is not None
+
+        # Modify the file content directly
+        yaml_content_updated = "key1: updated_value"
+        mock_config_file(yaml_content_updated)
+
+        # Should still return cached version
+        config2 = load_config()
+        assert config2["key1"] == "value1"
+
+        # Reset cache and reload
+        utils._config_cache = None
+        config3 = load_config()
+        assert config3["key1"] == "updated_value"
 
 # Ensure utils.CONFIG_FILE_PATH is reset if a test modifies it and fails
 @pytest.fixture(autouse=True)
