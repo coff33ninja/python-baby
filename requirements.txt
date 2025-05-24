@@ -28,3 +28,4 @@ PyYAML
 
 # Testing
 pytest
+evaluate

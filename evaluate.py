@@ -2,14 +2,19 @@ import argparse
 import json
 import logging  # Added for logging
 import multiprocessing
+import sys # Added for sys.platform
 import os
-import sys
 import time
 import traceback
 from io import StringIO
 
+# Call freeze_support() when the module is imported on Windows,
+# before any multiprocessing objects might be created.
+if sys.platform == "win32":
+    multiprocessing.freeze_support()
+
 import torch
-from datasets import load_metric
+import evaluate as hf_evaluate # Use the 'evaluate' library for metrics
 from RestrictedPython import compile_restricted, safe_globals
 from RestrictedPython.PrintCollector import PrintCollector
 
@@ -152,8 +157,8 @@ class SecureExecutor:
 def calculate_text_metrics(predictions: list[str], references: list[list[str]]):
     results = {}
     try:
-        sacrebleu_metric = load_metric("sacrebleu")
-        rouge_metric = load_metric("rouge")
+        sacrebleu_metric = hf_evaluate.load("sacrebleu")
+        rouge_metric = hf_evaluate.load("rouge")
         str_predictions = [str(p) for p in predictions]
         sacrebleu_score = sacrebleu_metric.compute(
             predictions=str_predictions, references=references
@@ -461,8 +466,6 @@ def main():
 
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()
-
     # Setup logging using values from config file
     log_f = get_config_value(
         "logging.log_file", "project_ai_evaluate.log"
