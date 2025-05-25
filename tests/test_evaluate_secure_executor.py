@@ -4,11 +4,6 @@ import logging
 import sys
 import os
 
-# Adjust sys.path to allow evaluate module to be found if tests are run from root
-# This assumes tests/ is a subdirectory of the project root where evaluate.py is.
-# If evaluate.py is part of an installable package, this might not be needed.
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 from evaluate import SecureExecutor  # Now it should be found
 
 # Get a logger for this test module
@@ -31,7 +26,7 @@ def test_execute_simple_pass():
     assert (
         passed is True
     ), f"Test should pass. Log: {log}, Stdout: {stdout}, Stderr: {stderr}"
-    assert "Execution completed" in log
+    assert "execution completed" in log.lower()  # Case-insensitive
     test_logger.info("Finished test_execute_simple_pass")
 
 
@@ -47,9 +42,11 @@ def test_execute_assertion_fail():
 
     assert passed is False, f"Test should fail. Log: {log}"
     assert (
-        "AssertionError" in log or "AssertionError" in stderr
-    )  # Error might be in log or stderr
-    assert "x should be 20" in log or "x should be 20" in stderr
+        "assertionerror" in log.lower() or "assertionerror" in stderr.lower()
+    ), "Log or stderr should indicate AssertionError"
+    assert (
+        "x should be 20" in log or "x should be 20" in stderr
+    ), "Assertion message not found"
 
 
 def test_execute_restricted_import_os(caplog):
@@ -102,9 +99,11 @@ def test_execute_infinite_loop_timeout():
     assert "execution timed out" in log.lower(), "Log message should indicate timeout."
     # Check if duration is close to timeout, allowing for some overhead but not excessively long.
     # Allowing a range around the 1-second timeout to account for process start/stop overhead
+    # For a 3s timeout, expect it to be slightly above 3s due to overhead.
+    # Allow a tighter upper bound, e.g., timeout + 1.5s for overhead.
     assert (
-        2.5 <= duration < (3.0 + 2.0)  # Adjusted for 3s timeout, allow up to 2s overhead
-    ), f"Execution duration {duration} was not close to the timeout of 3s."
+        2.8 <= duration < (3.0 + 1.5)
+    ), f"Execution duration {duration:.4f}s was not within the expected range for a 3s timeout."
 
 
 def test_execute_print_capture():
@@ -165,7 +164,7 @@ def test_execute_empty_code_and_tests():
     print(f"Stderr: {stderr}")
 
     assert passed is True  # Empty code and tests should "pass" (no errors)
-    assert "Execution completed" in log
+    assert "execution completed" in log.lower()  # Case-insensitive
 
 
 def test_execute_code_modifying_restricted_globals_fails_safely():
@@ -196,6 +195,20 @@ def test_execute_code_modifying_restricted_globals_fails_safely():
     # the 'len' in `assert len([]) == 0` within the test string will still refer to the
     # original builtin 'len' provided in restricted_globals['__builtins__'], not the one
     # modified in the 'code' string's scope.
+    # Given the current basic _write_ guard (`_write_ = lambda x: x`) in evaluate.py
+    # and how RestrictedPython handles scope, the 'len' in `assert len([]) == 0`
+    # within the test string will still refer to the original builtin 'len'
+    # provided in restricted_globals['__builtins__'], not the one modified in the
+    # 'code' string's scope. The assignment `len = ...` in `code` creates a local
+    # variable `len` within the scope of `code`'s execution, which does not
+    # override the `len` available to the `tests` string's execution context.
+    # and how RestrictedPython handles scopes for `exec` calls:
+    # The `code` string and `tests_string` are executed in the same `local_scope`.
+    # However, `RestrictedPython`'s compilation and execution model, along with the
+    # `safe_globals` provided, means that builtins like `len` accessed in the `tests_string`
+    # will typically resolve to the ones in `safe_globals['__builtins__']` unless
+    # the `local_scope` explicitly shadows them in a way that `compile_restricted` allows
+    # and the test execution picks up. The current behavior is that the original `len` is used.
     assert (
         passed is True
     ), "Test should pass as the overwrite of 'len' is contained in its scope."
@@ -204,6 +217,47 @@ def test_execute_code_modifying_restricted_globals_fails_safely():
         "modified_len" not in stdout
     ), "The modified 'len' should not have affected print output if it was printed."
 
+
+def test_execute_malformed_test_string_syntax_error():
+    code = "x = 10"
+    tests = "assert x =="  # Syntax error in test string
+    executor = SecureExecutor(timeout_seconds=DEFAULT_TEST_TIMEOUT)
+    passed, log, stdout, stderr = executor.execute(code, tests)
+
+    print(f"Log: {log}")
+    print(f"Stdout: {stdout}")
+    print(f"Stderr: {stderr}")
+
+    assert passed is False, "Execution should fail due to syntax error in test string."
+    assert (
+        "syntaxerror" in log.lower() or "syntaxerror" in stderr.lower()
+    ), "Log or stderr should indicate SyntaxError."
+
+
+def test_execute_very_large_code_string_basic_pass():
+    # Simple test to ensure basic handling of large code string, not for performance.
+    # RestrictedPython or the system might have its own limits.
+    # Create a long series of simple assignments.
+    num_assignments = (
+        500  # Reduced from a very large number to keep test reasonably fast
+    )
+    code_lines = [f"var_{i} = {i}" for i in range(num_assignments)]
+    code = "\n".join(code_lines) + f"\nfinal_result = var_{num_assignments-1}"
+    tests = f"assert final_result == {num_assignments-1}"
+
+    executor = SecureExecutor(
+        timeout_seconds=DEFAULT_TEST_TIMEOUT + 5
+    )  # Slightly longer timeout for larger code
+    passed, log, stdout, stderr = executor.execute(code, tests)
+
+    assert (
+        passed is True
+    ), f"Execution with large code string should pass. Log: {log}, Stderr: {stderr}"
+    assert "execution completed" in log.lower()
+
+
+# It might be useful to also add tests for _get_full_ MartyrReport if that was part of SecureExecutor,
+# but currently, it's not directly exposed. The current tests focus on the execute method's behavior.
 
 def test_long_output_capture(caplog):
     # Tests if large stdout/stderr are handled without crashing (though they might be truncated by other means)

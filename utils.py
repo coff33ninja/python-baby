@@ -14,6 +14,13 @@ _warned_missing_keys = set() # For get_config_value default usage
 _warned_type_conversion_failures = set() # For get_typed_config_value issues
 
 
+def reset_config_cache():
+    """Resets the internal configuration cache. Primarily for testing."""
+    global _config_cache
+    _config_cache = None
+    # Use the module-level logger if available, or a basic print if called very early
+    logger.debug("Configuration cache reset.")
+
 
 def load_config():
     global _config_cache
