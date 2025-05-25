@@ -9,7 +9,7 @@ import subprocess
 import sys
 import traceback
 import logging # Added for logging
-from utils import get_config_value, setup_logging # Added for config and logging
+from utils import get_typed_config_value, setup_logging, get_config_value # Updated import
 from typing import TypeVar, Type  # Added for helper
 
 # --- Setup Logging ---
@@ -19,37 +19,6 @@ setup_logging()  # Removed arguments since setup_logging does not accept any.
 
 # --- Initialize logger for this module ---
 logger = logging.getLogger(__name__)
-# --- Helper function for typed config values (local to this module) ---
-
-_T_HELPER_GUI = TypeVar("_T_HELPER_GUI", float, int, str, bool)
-
-def _get_typed_config_value(
-    key: str, default_value: _T_HELPER_GUI, target_type: Type[_T_HELPER_GUI]
-) -> _T_HELPER_GUI:
-    val = get_config_value(
-        key, default_value
-    )  # get_config_value from utils returns Any
-    # If val is already the exact target type (and not a bool masquerading as int/float if target is int/float)
-    if isinstance(val, target_type) and not (
-        target_type in (int, float) and isinstance(val, bool)
-    ):
-        return val
-    # If val is a type that can be directly converted (int, float, str, bool)
-    if isinstance(val, (int, float, str, bool)):
-        try:
-            return target_type(val)  # Attempt conversion
-        except (ValueError, TypeError) as e:
-            logger.warning(
-                f"Could not convert configured value '{str(val)[:100]}' for key '{key}' to {target_type.__name__}: {e}. "
-                f"Using default value: {default_value}"
-            )
-            return default_value
-    else:  # val is some other unexpected type (e.g., dict, list)
-        logger.warning(
-            f"Configuration value for '{key}' is of unexpected type: {type(val)} (value: '{str(val)[:100]}'). "
-            f"Using default value: {default_value}"
-        )
-        return default_value
 
 
 # Attempt to import PyPDF2 for PDF processing
@@ -70,12 +39,25 @@ MASTER_KEY = PythonMasterAI.MASTER_KEY
 logger.info("PythonMasterAI model initialized.")
 
 
-def interact_with_ai(command, user_key):
+def validate_master_key(user_key_input, session_key_state):
+    if user_key_input == MASTER_KEY:
+        logger.info("Master Key validated successfully for session.")
+        return user_key_input, "Master Key Validated for this session."
+    elif session_key_state == MASTER_KEY: # Key already validated in session
+        logger.debug("Using session-validated Master Key.")
+        return session_key_state, "Using session-validated Master Key."
+    logger.warning("Invalid Master Key provided or session key not validated.")
+    return None, "Invalid Master Key. Please enter the correct key."
+
+def interact_with_ai(command, user_key, session_key_state):
     logger.debug(f"interact_with_ai called with command: '{command[:50]}...'")
-    if user_key != MASTER_KEY:
+    
+    current_valid_key = session_key_state if session_key_state == MASTER_KEY else user_key
+    if current_valid_key != MASTER_KEY:
         logger.warning("Invalid Master key attempt in interact_with_ai.")
         return "Invalid Master key"
-    response = model.process_input(command, MASTER_KEY)
+
+    response = model.process_input(command, current_valid_key)
     logger.debug(f"Response from AI: {response[:100]}...")
     return response
 
@@ -118,10 +100,12 @@ def get_status():
     return model.get_status() # Assumes get_status returns a string
 
 
-def approve_growth(user_key):
+def approve_growth(user_key, session_key_state):
     global model
     logger.info("Growth approval requested via GUI.")
-    if user_key != MASTER_KEY:
+
+    current_valid_key = session_key_state if session_key_state == MASTER_KEY else user_key
+    if current_valid_key != MASTER_KEY:
         logger.warning("Invalid Master key attempt in approve_growth.")
         return "Invalid Master key"
     try:
@@ -140,11 +124,14 @@ def approve_growth(user_key):
         return f"Error during growth: {e}"
 
 
-def handle_manual_upload(files, target_stage, user_key):
+def handle_manual_upload(files, target_stage, user_key, session_key_state):
     logger.info(f"Manual upload initiated for stage '{target_stage}' with {len(files) if files else 0} files.")
-    if user_key != MASTER_KEY:
+    
+    current_valid_key = session_key_state if session_key_state == MASTER_KEY else user_key
+    if current_valid_key != MASTER_KEY:
         logger.warning("Invalid Master key attempt in handle_manual_upload.")
         return "Invalid Master key"
+
     if not files:
         logger.warning("No files were uploaded in handle_manual_upload.")
         return "No files were uploaded."
@@ -249,14 +236,18 @@ def handle_manual_upload(files, target_stage, user_key):
     logger.info(f"Manual upload process completed for stage '{target_stage}', version '{version_timestamp}'.")
     return final_message
 
-def run_script_in_background(command_list, user_key, script_name):
-    if user_key != MASTER_KEY: # Assuming MASTER_KEY is globally defined or accessible
+def run_script_in_background(command_list, user_key, session_key_state, script_name):
+    current_valid_key = session_key_state if session_key_state == MASTER_KEY else user_key
+    if current_valid_key != MASTER_KEY:
         logger.warning(f"Invalid Master Key used for attempting to run {script_name}.")
         return "Invalid Master key"
 
     # Log user info carefully, e.g., just the last few chars of the key if it's sensitive
-    user_key_display = f"...{user_key[-4:]}" if len(user_key) >=4 else "provided key"
+    # Use current_valid_key for display
+    user_key_display = f"...{current_valid_key[-4:]}" if len(current_valid_key) >=4 else "provided key"
     logger.info(f"User (key ending '{user_key_display}') attempting to run {script_name} with command: {' '.join(command_list)}")
+
+    script_timeout = get_typed_config_value("gui_settings.script_execution_timeout", 3600, int) # Default 1 hour
 
     try:
         logger.info(f"Executing command for {script_name}: {' '.join(command_list)}")
@@ -274,7 +265,8 @@ def run_script_in_background(command_list, user_key, script_name):
             check=False, # We will check returncode manually
             encoding='utf-8', # Specify encoding for decoding
             errors='replace', # Replace characters that can't be decoded
-            env=env # Pass the modified environment
+            env=env, # Pass the modified environment
+            timeout=script_timeout # Add timeout
         )
 
         output_message = f"--- {script_name} Execution Details ---\n"
@@ -318,13 +310,13 @@ def run_script_in_background(command_list, user_key, script_name):
         # Final Status
         if process.returncode == 0:
             logger.info(f"{script_name} completed successfully. Command: {' '.join(command_list)}")
-            final_status_message = f"{script_name} completed successfully."
+            final_status_message = f"✅ {script_name} completed successfully."
             # Show warnings or deprecation notices from stderr even on success
             if error_summary and ("warning" in error_summary.lower() or "deprecated" in error_summary.lower()):
                 final_status_message += f"\nNotices from script: {error_summary}"
         else:
             logger.error(f"{script_name} failed with return code {process.returncode}. Command: {' '.join(command_list)}. Stderr (full): {process.stderr.strip()}")
-            final_status_message = f"{script_name} FAILED with return code {process.returncode}."
+            final_status_message = f"❌ {script_name} FAILED with return code {process.returncode}."
             if error_summary:
                 final_status_message += f"\n{error_summary}"
             elif process.stderr and process.stderr.strip():
@@ -337,6 +329,10 @@ def run_script_in_background(command_list, user_key, script_name):
         output_message += "For full details, check the main application console and the project log file (e.g., project_ai_gui.log)."
 
         return output_message
+    except subprocess.TimeoutExpired:
+        logger.error(f"{script_name} timed out after {script_timeout} seconds. Command: {' '.join(command_list)}", exc_info=True)
+        return f"Error: {script_name} timed out after {script_timeout} seconds. The process was terminated. Check logs for more details."
+
 
     except FileNotFoundError as e:
         # This specifically catches if the script itself (e.g., "python" or "train.py") isn't found
@@ -349,14 +345,14 @@ def run_script_in_background(command_list, user_key, script_name):
         return f"Error in GUI while launching {script_name}: {type(e).__name__}: {e}\nTraceback: {traceback.format_exc()}\nThis is likely an issue in the GUI or environment, not the script itself."
 
 
-def run_train_script_gui(stage, user_key):
+def run_train_script_gui(stage, user_key, session_key_state):
     if not stage:
         logger.warning("Train script run attempted without selecting a stage.")
         return "Please select a stage for training."
     command = [sys.executable, "train.py", "--stage", stage]
-    return run_script_in_background(command, user_key, "Training Script (train.py)")
+    return run_script_in_background(command, user_key, session_key_state, "Training Script (train.py)")
 
-def run_scrape_data_script_gui(stage, sources_str, urls_str, user_key):
+def run_scrape_data_script_gui(stage, sources_str, urls_str, user_key, session_key_state):
     if not stage:
         logger.warning("Scraper script run attempted without selecting a stage.")
         return "Please select a stage for scraping."
@@ -376,13 +372,16 @@ def run_scrape_data_script_gui(stage, sources_str, urls_str, user_key):
         return f"Mismatch between number of sources ({len(sources_list)}) and URLs ({len(urls_list)})."
 
     command = [sys.executable, "scrape_data.py", stage] + [item for pair in zip(sources_list, urls_list) for item in pair]
-    return run_script_in_background(command, user_key, "Scraping Script (scrape_data.py)")
+    return run_script_in_background(command, user_key, session_key_state, "Scraping Script (scrape_data.py)")
 
-def load_latest_model_from_checkpoint_gui(user_key):
+def load_latest_model_from_checkpoint_gui(user_key, session_key_state):
     logger.info("Load latest model from checkpoint requested via GUI.")
-    if user_key != MASTER_KEY:
+
+    current_valid_key = session_key_state if session_key_state == MASTER_KEY else user_key
+    if current_valid_key != MASTER_KEY:
         logger.warning("Invalid Master key attempt in load_latest_model_from_checkpoint_gui.")
         return "Invalid Master key. Model reload aborted."
+
     status_message = model._try_load_latest_checkpoint() # This method now logs internally too
     logger.info(f"Checkpoint load attempt status: {status_message}")
     return status_message
@@ -492,10 +491,10 @@ def get_file_content_gui(stage_name: str, version_timestamp: str, filename: str)
             # Get truncation limits from config, with defaults
             default_max_bytes = 1024 * 1024  # 1MB
             default_max_lines = 200
-            max_bytes_limit = _get_typed_config_value(
+            max_bytes_limit = get_typed_config_value(
                 "gui_settings.file_preview.max_bytes", default_max_bytes, int
             )
-            max_lines_limit = _get_typed_config_value(
+            max_lines_limit = get_typed_config_value(
                 "gui_settings.file_preview.max_lines", default_max_lines, int
             )
 
@@ -539,11 +538,14 @@ def get_manifest_content_gui(stage_name: str, version_timestamp: str):
         logger.error(f"Error reading manifest.json {manifest_path}: {e}", exc_info=True)
         return f"Error reading manifest.json: {e}"
 
-def set_latest_version_gui(stage_name: str, version_timestamp: str, master_key: str):
+def set_latest_version_gui(stage_name: str, version_timestamp: str, master_key_input: str, session_key_state: gr.State):
     logger.info(f"Attempting to set version '{version_timestamp}' as latest for stage '{stage_name}'.")
-    if master_key != MASTER_KEY:
+
+    current_valid_key = session_key_state if session_key_state == MASTER_KEY else master_key_input # type: ignore
+    if current_valid_key != MASTER_KEY:
         logger.warning("Invalid Master key in set_latest_version_gui.")
-    if not stage_name or not version_timestamp:
+        return "Invalid Master key."
+    if not stage_name or not version_timestamp: # type: ignore
         return "Stage name and version timestamp must be provided."
     stage_data_dir = os.path.join("data", stage_name)
     version_path_to_check = os.path.join(stage_data_dir, version_timestamp)
@@ -560,12 +562,15 @@ def set_latest_version_gui(stage_name: str, version_timestamp: str, master_key: 
         logger.error(f"Error updating latest.txt for stage '{stage_name}': {e}", exc_info=True)
         return f"Error updating latest.txt: {e}"
 
-def toggle_file_exclusion_gui(stage_name: str, version_timestamp: str, filename: str, master_key: str):
+def toggle_file_exclusion_gui(stage_name: str, version_timestamp: str, filename: str, master_key_input: str, session_key_state: gr.State):
     logger.info(f"Attempting to toggle exclusion for file '{filename}' in stage '{stage_name}', version '{version_timestamp}'.")
-    if master_key != MASTER_KEY:
+
+    current_valid_key = session_key_state if session_key_state == MASTER_KEY else master_key_input # type: ignore
+    if current_valid_key != MASTER_KEY:
         logger.warning("Invalid Master key in toggle_file_exclusion_gui.")
-    return "Invalid Master key.", False
-    if not stage_name or not version_timestamp or not filename:
+        return "Invalid Master key.", False
+
+    if not stage_name or not version_timestamp or not filename: # type: ignore
         return "Stage, version, and filename must be provided.", False
     manifest_path = os.path.join("data", stage_name, version_timestamp, "manifest.json")
     if not os.path.exists(manifest_path):
@@ -593,9 +598,11 @@ def toggle_file_exclusion_gui(stage_name: str, version_timestamp: str, filename:
         logger.error(f"Error toggling exclusion for '{filename}': {e}", exc_info=True)
         return f"Error toggling exclusion for '{filename}': {e}", False
 
-def list_manual_uploads(target_stage, user_key): # This function is mostly for direct user feedback.
+def list_manual_uploads(target_stage, user_key, session_key_state): # This function is mostly for direct user feedback.
     logger.debug(f"Listing manual uploads for stage: {target_stage}")
-    if user_key != MASTER_KEY:
+
+    current_valid_key = session_key_state if session_key_state == MASTER_KEY else user_key
+    if current_valid_key != MASTER_KEY:
         return "Invalid Master key"
     if not target_stage:
         return "Please select a stage to view uploads for."
@@ -621,12 +628,21 @@ logger.info(f"Available stages for GUI: {available_stages}")
 
 with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
     gr.Markdown("## PythonMasterAI Control Panel")
+
+    # Master Key Management
+    session_master_key = gr.State(None) # Stores validated master key for the session
+    with gr.Row(variant="panel"):
+        gr.Markdown("### Master Key Validation (Required for most actions)")
+        master_key_input_global = gr.Textbox(label="Enter Master Key", type="password", placeholder="Enter Master Key to enable actions")
+        validate_key_button = gr.Button("Validate Master Key for Session")
+        key_validation_status_output = gr.Textbox(label="Key Status", interactive=False)
+        validate_key_button.click(validate_master_key, inputs=[master_key_input_global, session_master_key], outputs=[session_master_key, key_validation_status_output])
+
     with gr.Tab("Master Commands"):
         cmd_input = gr.Textbox(label="Command", placeholder="Enter MASTER: or HALT_TEEN")
-        key_input = gr.Textbox(label="Master Key", type="password")
         cmd_output = gr.Textbox(label="Response")
         cmd_button = gr.Button("Execute")
-        cmd_button.click(interact_with_ai, inputs=[cmd_input, key_input], outputs=cmd_output)
+        cmd_button.click(interact_with_ai, inputs=[cmd_input, master_key_input_global, session_master_key], outputs=cmd_output)
     with gr.Tab("Research"):
         research_button = gr.Button("Trigger Research")
         research_output = gr.Textbox(label="Research Logs")
@@ -640,48 +656,42 @@ with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
         status_output = gr.Textbox(label="AI Status")
         status_button.click(get_status, outputs=status_output)
     with gr.Tab("Growth"):
-        growth_key_input = gr.Textbox(label="Master Key", type="password")
         growth_button = gr.Button("Approve Growth")
         growth_output = gr.Textbox(label="Growth Status")
-        growth_button.click(approve_growth, inputs=growth_key_input, outputs=growth_output)
+        growth_button.click(approve_growth, inputs=[master_key_input_global, session_master_key], outputs=growth_output)
     with gr.Tab("Manual Data Upload"):
         gr.Markdown("Upload training documents (e.g., .txt, .py, .md, .pdf). Content will be extracted and saved as .txt files within a new versioned dataset.")
         upload_files = gr.File(label="Upload Training Files", file_count="multiple")
         upload_stage_select = gr.Dropdown(choices=available_stages, label="Target Stage for Uploaded Data", value=model.stage)
-        upload_key_input = gr.Textbox(label="Master Key", type="password")
         upload_button = gr.Button("Upload and Save Files")
         upload_output = gr.Textbox(label="Upload Status", lines=5)
-        upload_button.click(handle_manual_upload, inputs=[upload_files, upload_stage_select, upload_key_input], outputs=upload_output)
+        upload_button.click(handle_manual_upload, inputs=[upload_files, upload_stage_select, master_key_input_global, session_master_key], outputs=upload_output)
         gr.Markdown("---")
         gr.Markdown("The `list_manual_uploads` button below might be deprecated or refer to non-versioned uploads. Use Dataset Management tab for versioned data.")
         view_uploads_button = gr.Button("View Legacy Manually Uploaded Files for Selected Stage")
         view_uploads_output = gr.Textbox(label="List of Legacy Uploaded Files", lines=5, interactive=False)
-        view_uploads_button.click(list_manual_uploads, inputs=[upload_stage_select, upload_key_input], outputs=view_uploads_output)
+        view_uploads_button.click(list_manual_uploads, inputs=[upload_stage_select, master_key_input_global, session_master_key], outputs=view_uploads_output)
     with gr.Tab("Run Training Script"):
         gr.Markdown("Run the `train.py` script. This will execute in a separate process.")
         train_stage_select = gr.Dropdown(choices=available_stages, label="Select Stage for Training", value=model.stage)
-        train_key_input = gr.Textbox(label="Master Key", type="password")
         train_run_button = gr.Button("Start Training Script")
         train_run_output = gr.Textbox(label="Training Script Output", lines=10, interactive=False)
-        train_run_button.click(run_train_script_gui, inputs=[train_stage_select, train_key_input], outputs=train_run_output)
+        train_run_button.click(run_train_script_gui, inputs=[train_stage_select, master_key_input_global, session_master_key], outputs=train_run_output)
     with gr.Tab("Run Scraper Script"):
         gr.Markdown("Run the `scrape_data.py` script. This will execute in a separate process.")
         scrape_stage_select = gr.Dropdown(choices=available_stages, label="Select Stage for Scraping", value=model.stage)
         scrape_sources_input = gr.Textbox(label="Sources (comma-separated)", placeholder="e.g., github_beginner,study_guides")
         scrape_urls_input = gr.Textbox(label="URLs (comma-separated, in same order as sources)", placeholder="e.g., http://url1.com,http://url2.com")
-        scrape_key_input = gr.Textbox(label="Master Key", type="password")
         scrape_run_button = gr.Button("Start Scraper Script")
         scrape_run_output = gr.Textbox(label="Scraper Script Output", lines=10, interactive=False)
-        scrape_run_button.click(run_scrape_data_script_gui, inputs=[scrape_stage_select, scrape_sources_input, scrape_urls_input, scrape_key_input], outputs=scrape_run_output)
+        scrape_run_button.click(run_scrape_data_script_gui, inputs=[scrape_stage_select, scrape_sources_input, scrape_urls_input, master_key_input_global, session_master_key], outputs=scrape_run_output)
     with gr.Tab("Model Management"):
         gr.Markdown("Manage model checkpoints. Note: The model automatically attempts to load the latest compatible checkpoint on startup.")
-        load_checkpoint_key_input = gr.Textbox(label="Master Key", type="password", placeholder="Enter Master Key to enable loading")
         load_checkpoint_button = gr.Button("Load Latest Model from Checkpoint for Current Stage & Configuration")
         load_checkpoint_status_output = gr.Textbox(label="Load Status", interactive=False, lines=3)
-        load_checkpoint_button.click(load_latest_model_from_checkpoint_gui, inputs=[load_checkpoint_key_input], outputs=[load_checkpoint_status_output])
+        load_checkpoint_button.click(load_latest_model_from_checkpoint_gui, inputs=[master_key_input_global, session_master_key], outputs=[load_checkpoint_status_output])
     with gr.Tab("Dataset Management"):
         gr.Markdown("## Dataset Version Explorer and Management")
-        dm_master_key_input = gr.Textbox(label="Master Key (for actions like Set Latest / Exclude)", type="password")
         with gr.Row():
             dm_stage_select = gr.Dropdown(choices=available_stages, label="Select Stage", value=model.stage)
             dm_refresh_versions_btn = gr.Button("Refresh Versions List")
@@ -700,8 +710,8 @@ with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
                 version_ids = versions_data["Version ID"].tolist()
                 return gr.Dropdown.update(choices=version_ids, value=version_ids[0] if version_ids else None)  # type: ignore[attr-defined]
             return gr.Dropdown.update(choices=[], value=None)  # type: ignore[attr-defined]
-        dm_versions_df.change(update_version_action_dropdown, inputs=[dm_versions_df], outputs=[dm_version_select_for_actions])
-        dm_set_latest_btn.click(set_latest_version_gui, inputs=[dm_stage_select, dm_version_select_for_actions, dm_master_key_input], outputs=[dm_set_latest_status_text]).then(get_dataset_versions, inputs=[dm_stage_select], outputs=[dm_versions_df])
+        dm_versions_df.change(update_version_action_dropdown, inputs=[dm_versions_df], outputs=[dm_version_select_for_actions]) # type: ignore
+        dm_set_latest_btn.click(set_latest_version_gui, inputs=[dm_stage_select, dm_version_select_for_actions, master_key_input_global, session_master_key], outputs=[dm_set_latest_status_text]).then(get_dataset_versions, inputs=[dm_stage_select], outputs=[dm_versions_df])
         dm_view_manifest_btn.click(get_manifest_content_gui, inputs=[dm_stage_select, dm_version_select_for_actions], outputs=[dm_manifest_content_text])
         gr.Markdown("---")
         gr.Markdown("### Files in Selected Version")
@@ -719,8 +729,8 @@ with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
                 return gr.Dropdown.update(choices=valid_filenames, value=valid_filenames[0] if valid_filenames else None)  # type: ignore[attr-defined]
             return gr.Dropdown.update(choices=[], value=None)  # type: ignore[attr-defined]
         dm_files_df.change(update_file_action_dropdown, inputs=[dm_files_df], outputs=[dm_file_select_for_actions])
-        dm_file_select_for_actions.change(get_file_content_gui, inputs=[dm_stage_select, dm_selected_version_id_state, dm_file_select_for_actions], outputs=[dm_file_content_text])
-        dm_toggle_exclusion_btn.click(toggle_file_exclusion_gui, inputs=[dm_stage_select, dm_selected_version_id_state, dm_file_select_for_actions, dm_master_key_input], outputs=[dm_toggle_exclusion_status_text]).then(lambda stage, version: get_files_in_version(stage, version), inputs=[dm_stage_select, dm_selected_version_id_state],outputs=[dm_files_df])
+        dm_file_select_for_actions.change(get_file_content_gui, inputs=[dm_stage_select, dm_selected_version_id_state, dm_file_select_for_actions], outputs=[dm_file_content_text]) # type: ignore
+        dm_toggle_exclusion_btn.click(toggle_file_exclusion_gui, inputs=[dm_stage_select, dm_selected_version_id_state, dm_file_select_for_actions, master_key_input_global, session_master_key], outputs=[dm_toggle_exclusion_status_text]).then(lambda stage, version: get_files_in_version(stage, version), inputs=[dm_stage_select, dm_selected_version_id_state],outputs=[dm_files_df])
 
 logger.info("Launching Gradio interface...")
 iface.launch()
