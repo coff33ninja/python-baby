@@ -8,9 +8,8 @@ from datetime import datetime
 import subprocess
 import sys
 import traceback
-import logging # Added for logging
-from utils import get_typed_config_value, setup_logging, get_config_value # Updated import
-from typing import TypeVar, Type  # Added for helper
+import logging  # Added for logging
+from utils import get_typed_config_value, setup_logging  # Removed unused get_config_value
 
 # --- Setup Logging ---
 # Call setup_logging early, using config values.
@@ -34,7 +33,7 @@ except ImportError:
     logger.warning("PyPDF2 not installed. PDF upload support will be disabled.")
 
 
-model = PythonMasterAI() # This will log its own config messages
+model = PythonMasterAI()  # This will log its own config messages
 MASTER_KEY = PythonMasterAI.MASTER_KEY
 logger.info("PythonMasterAI model initialized.")
 
@@ -43,7 +42,7 @@ def validate_master_key(user_key_input, session_key_state):
     if user_key_input == MASTER_KEY:
         logger.info("Master Key validated successfully for session.")
         return user_key_input, "Master Key Validated for this session."
-    elif session_key_state == MASTER_KEY: # Key already validated in session
+    elif session_key_state == MASTER_KEY:  # Key already validated in session
         logger.debug("Using session-validated Master Key.")
         return session_key_state, "Using session-validated Master Key."
     logger.warning("Invalid Master Key provided or session key not validated.")
@@ -84,8 +83,8 @@ def discover_sources():
     discovered_message = f"Discovered sources in this run: {new_sources}\n\n" if new_sources else "No new sources discovered in this run.\n\n"
     try:
         with open("source_log.json", "r") as f:
-            logs = [json.loads(line) for line in f]
-        logger.info("Source log successfully read.")
+            logs = json.load(f)
+        logger.info("Source log successfully read as a single JSON object/array.")
         return discovered_message + "Last 5 source log entries:\n" + json.dumps(logs[-5:], indent=2)
     except FileNotFoundError:
         logger.error("source_log.json not found.")
