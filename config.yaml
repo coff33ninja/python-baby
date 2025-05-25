@@ -4,6 +4,9 @@
 # scraping behavior, logging, and GUI elements.
 
 # Default PythonMasterAI Model Architecture
+master_service:
+  auth_url: "http://localhost:8000/master/auth" # URL for the master key authentication service
+
 model_defaults:
   vocab_size: 16000         # Size of the vocabulary used by the tokenizer and model.
   n_layers: 2               # Number of transformer encoder layers.
@@ -29,11 +32,9 @@ checkpointing:
 
 # Evaluation Configuration
 evaluation:
-  # Default dataset file used by evaluate.py if no specific dataset is provided via command line.
   default_eval_dataset: "sample_evaluation_dataset.jsonl"
-  # Directory where evaluation results (e.g., reports, metrics) are saved.
   results_dir: "eval_results"
-  # Timeout in seconds for executing generated code snippets securely during evaluation.
+  tokenizer_max_input_length: 512 # Max input length for tokenizer during evaluation prompt construction
   secure_exec_timeout: 10
 
 # Scraper Configuration

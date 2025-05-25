@@ -10,10 +10,10 @@ import ast
 import re
 import time
 from urllib.parse import urlparse
-from datetime import datetime
+from datetime import datetime, timezone
 import os # type: ignore
 import glob # Added for checkpoint loading
-from utils import get_config_value # Added for config management
+from utils import get_config_value, get_typed_config_value # Updated import
 from typing import Optional, TypeVar, Type, cast # Added for Optional type hint and helper
 import logging
 
@@ -21,22 +21,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 API_CONFIG_FILE_PATH = "api_config.json"
-# --- Helper function for typed config values (local to this module) ---
-_T_HELPER = TypeVar('_T_HELPER', float, int, str)
-
-def _get_typed_config_value_local(key: str, default_value: _T_HELPER, target_type: Type[_T_HELPER]) -> _T_HELPER:
-    val = get_config_value(key, default_value)
-    if isinstance(val, target_type) and not (target_type in (int, float) and isinstance(val, bool)):
-        return val
-    if isinstance(val, (int, float, str, bool)):
-        try:
-            return target_type(val)
-        except (ValueError, TypeError) as e:
-            logger.warning(f"Could not convert config value '{str(val)[:50]}' for '{key}' to {target_type.__name__}. Error: {e}. Using default: {default_value}.")
-            return default_value
-    else:
-        logger.warning(f"Config value for '{key}' is of unexpected type: {type(val).__name__} ('{str(val)[:50]}'). Using default: {default_value}.")
-        return default_value
 class PythonMasterAI(nn.Module):
     MASTER_KEY = "8f9b7f8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d7e7f9b8f6e6c9b9d"
 
@@ -52,14 +36,14 @@ class PythonMasterAI(nn.Module):
         super().__init__()
 
         # Load defaults from config, allowing overrides from constructor arguments
-        config_vocab_size = _get_typed_config_value_local('model_defaults.vocab_size', 16000, int)
-        config_n_layers = _get_typed_config_value_local('model_defaults.n_layers', 2, int)
-        config_n_heads = _get_typed_config_value_local('model_defaults.n_heads', 4, int)
-        config_hidden_size = _get_typed_config_value_local('model_defaults.hidden_size', 256, int)
-        config_dropout = _get_typed_config_value_local('model_defaults.dropout', 0.1, float)
-        config_activation = _get_typed_config_value_local('model_defaults.activation', "relu", str)
-        config_ff_factor = _get_typed_config_value_local('model_defaults.dim_feedforward_factor', 4, int)
-        self.max_log_entries = _get_typed_config_value_local('logging.max_in_memory_log_entries', 1000, int)
+        config_vocab_size = get_typed_config_value('model_defaults.vocab_size', 16000, int)
+        config_n_layers = get_typed_config_value('model_defaults.n_layers', 2, int)
+        config_n_heads = get_typed_config_value('model_defaults.n_heads', 4, int)
+        config_hidden_size = get_typed_config_value('model_defaults.hidden_size', 256, int)
+        config_dropout = get_typed_config_value('model_defaults.dropout', 0.1, float)
+        config_activation = get_typed_config_value('model_defaults.activation', "relu", str)
+        config_ff_factor = get_typed_config_value('model_defaults.dim_feedforward_factor', 4, int)
+        self.max_log_entries = get_typed_config_value('logging.max_in_memory_log_entries', 1000, int)
 
         # Assign attributes, ensuring correct types
         self.vocab_size: int = int(vocab_size) if vocab_size is not None else config_vocab_size
@@ -104,8 +88,8 @@ class PythonMasterAI(nn.Module):
             self.tokenizer.pad_token = self.tokenizer.eos_token
             logger.info("Tokenizer pad_token set to eos_token.")
 
-        self.knowledge_gaps = []
-        self.known_sources = self.load_known_sources()
+        self.knowledge_gaps: list = []
+        self.known_sources: dict = {} # Initialize as empty dict; populated by evaluate_source
         self.current_dataset_version = None
         self.api_config = None # For external API configurations
         self._load_api_config() # Load external API configurations
@@ -266,6 +250,9 @@ class PythonMasterAI(nn.Module):
     def generate_for_evaluation(self, prompt_text: str, task_type: str,
                                 context_code: Optional[str] = None, max_gen_length: int = 150) -> str: # Allow context_code to be Optional
         self.eval()
+        tokenizer_max_input_len = get_typed_config_value(
+            "evaluation.tokenizer_max_input_length", 512, int
+        )
 
         # Ensure prompt_text used in f-strings is a string, defaulting to empty if None was passed
         # (though current type hint is str, this makes it robust if None slips through or if hint changes)
@@ -290,7 +277,6 @@ class PythonMasterAI(nn.Module):
         else:
             full_prompt = f"You are PythonMasterAI. Respond to the following: {_prompt_text_str}"
 
-        tokenizer_max_input_len = 512
         inputs = self.tokenizer(full_prompt, return_tensors="pt", padding="max_length", truncation=True, max_length=tokenizer_max_input_len)
         input_ids = inputs.input_ids.to(self.device)
         attention_mask = inputs.attention_mask.to(self.device)
@@ -332,16 +318,28 @@ class PythonMasterAI(nn.Module):
         if len(self.research_log) > self.max_log_entries:
             self.research_log = self.research_log[-self.max_log_entries:]
 
-    def log_source(self, source, url, score, added):
-        self.source_log.append({"source": source, "url": url, "score": score, "added": added})
+    def log_source(self, source_name: str, url: str, score: float, added: bool, query: str, stage: str, reason_if_not_added: Optional[str] = None):
+        timestamp = datetime.now(timezone.utc).isoformat()
+        log_entry = {
+            "timestamp": timestamp,
+            "source_name": source_name,
+            "url": url,
+            "score": score,
+            "added": added,
+            "discovery_query": query,
+            "ai_stage": stage,
+        }
+        if not added and reason_if_not_added:
+            log_entry["reason_if_not_added"] = reason_if_not_added
+
+        self.source_log.append(log_entry)
         # Note: The source_log.json file is appended to and can grow large.
         # Consider external log rotation or management for disk usage if it becomes an issue.
         with open("source_log.json", "a") as f:
-            json.dump({"source": source, "url": url, "score": score, "added": added}, f)
+            json.dump(log_entry, f)
             f.write("\n")
         if len(self.source_log) > self.max_log_entries:
             self.source_log = self.source_log[-self.max_log_entries:]
-
     def load_known_sources(self):
         return {
             "github_beginner": ["https://api.github.com/search/repositories?q=language:python+stars:>100"],
@@ -567,20 +565,30 @@ class PythonMasterAI(nn.Module):
 
     def discover_new_sources(self):
         queries = self.formulate_research_queries()
-        new_sources = []
+        newly_added_sources_info = []
+        new_sources_added_count = 0
+        evaluated_urls_this_cycle = set() # To avoid re-evaluating the same URL in this cycle
+
+        if not queries:
+            logger.info("No research queries formulated, skipping source discovery.")
+            return [], 0
+
         for query in queries:
             candidate_sources = self.search_for_sources(query)
-            for source, url in candidate_sources:
-                score = self.evaluate_source(source, url, query)
-                if score > 0.7:
-                    self.known_sources[source] = [url]
-                    self.log_source(source, url, score, added=True)
-                    new_sources.append(source)
+            for source_name, url in candidate_sources:
+                if url in evaluated_urls_this_cycle:
+                    logger.debug(f"Skipping already evaluated URL in this cycle: {url} for query '{query}'")
+                    continue
+                evaluated_urls_this_cycle.add(url)
+
+                source_eval_info = self.evaluate_source(source_name, url, query)
+                # evaluate_source now handles logging and adding to self.known_sources
+                if source_eval_info and source_eval_info.get("added"):
+                    newly_added_sources_info.append(source_eval_info)
+                    new_sources_added_count +=1
                     self.log_task_progress("find_sources")
-                else:
-                    self.log_source(source, url, score, added=False)
-        logger.info(f"Discovered sources: {new_sources}")
-        return new_sources
+        logger.info(f"Source discovery cycle complete. Added {new_sources_added_count} new sources.")
+        return newly_added_sources_info, new_sources_added_count
 
     def search_for_sources(self, query):
         """
@@ -730,7 +738,12 @@ class PythonMasterAI(nn.Module):
         logger.info(f"Found {len(candidates)} potential new sources for query '{query}'.")
         return candidates
 
-    def evaluate_source(self, source_name, url, query):
+    def evaluate_source(self, source_name: str, url: str, query: str) -> dict:
+        """
+        Evaluates a potential source based on its content, relevance, authority, and freshness.
+        Logs the evaluation attempt and adds to self.known_sources if criteria are met.
+        Returns a dictionary with evaluation details.
+        """
         relevance_score = 0.0
         authority_score = 0.0
         freshness_score = 0.0
@@ -746,12 +759,23 @@ class PythonMasterAI(nn.Module):
         relevance_score = min(relevance_points / 2.5, 1.0) * 0.4 if relevance_points > 0 else 0.05
         parsed_url = urlparse(url)
         domain = parsed_url.netloc.lower()
-        github_details = None
-        pypi_details = None
+        github_details = None # type: ignore
+        pypi_details = None # type: ignore
+        source_type = "unknown"
+
+        # Check if source is already known
+        if url in self.known_sources:
+            existing_score = self.known_sources[url].get("score", 0.0)
+            self.log_source(source_name, url, existing_score, False, query, self.stage, reason_if_not_added="Already known")
+            logger.info(f"Source {url} already known with score {existing_score}. Not re-adding.")
+            return {"name": source_name, "url": url, "score": existing_score, "added": False, "reason": "Already known", "type": self.known_sources[url].get("type", "unknown")}
+
         if "github.com" in domain or "api.github.com" in domain:
             github_details = self._fetch_github_repo_details(url)
+            source_type = "github"
         elif "pypi.org" in domain:
             pypi_details = self._fetch_pypi_package_info(url)
+            source_type = "pypi"
         if github_details and 'stargazers_count' in github_details:
             stars = github_details['stargazers_count']
             if stars >= 1000:
@@ -775,7 +799,7 @@ class PythonMasterAI(nn.Module):
         if github_details and 'pushed_at' in github_details:
             last_push_date_str = github_details['pushed_at']
             try:
-                last_push_dt = datetime.fromisoformat(last_push_date_str.replace('Z', '+00:00'))
+                last_push_dt = datetime.fromisoformat(last_push_date_str.replace('Z', '+00:00')).replace(tzinfo=timezone.utc)
                 last_push_ts = last_push_dt.timestamp()
                 age_days = (current_time_ts - last_push_ts) / (60 * 60 * 24)
                 if age_days <= 30:
@@ -791,11 +815,11 @@ class PythonMasterAI(nn.Module):
         elif pypi_details and 'releases' in pypi_details and pypi_details['releases']:
             latest_version_str = pypi_details.get('info', {}).get('version')
             if latest_version_str and latest_version_str in pypi_details['releases']:
-                release_dates = [item['upload_time_iso_8601'] for item in pypi_details['releases'][latest_version_str] if 'upload_time_iso_8601' in item]
+                release_dates = [item['upload_time_iso_8601'] for item in pypi_details['releases'][latest_version_str] if isinstance(item, dict) and 'upload_time_iso_8601' in item]
                 if release_dates:
                     latest_upload_time_str = max(release_dates)
                     try:
-                        upload_dt = datetime.fromisoformat(latest_upload_time_str.replace('Z', '+00:00'))
+                        upload_dt = datetime.fromisoformat(latest_upload_time_str.replace('Z', '+00:00')).replace(tzinfo=timezone.utc)
                         upload_ts = upload_dt.timestamp()
                         age_days = (current_time_ts - upload_ts) / (60 * 60 * 24)
                         if age_days <= 90:
@@ -807,8 +831,19 @@ class PythonMasterAI(nn.Module):
                     except ValueError:
                         logger.warning(f"Could not parse PyPI date: {latest_upload_time_str}")
         total_score = relevance_score + authority_score + freshness_score
-        logger.debug(f"Evaluated '{source_name}' ({url}) for query '{query}': R={relevance_score:.2f}, A={authority_score:.2f}, F={freshness_score:.2f} -> Total={total_score:.2f}")
-        return min(total_score, 1.0)
+        final_score = round(min(total_score, 1.0), 2)
+        logger.debug(f"Evaluated '{source_name}' ({url}) for query '{query}': R={relevance_score:.2f}, A={authority_score:.2f}, F={freshness_score:.2f} -> Total={final_score:.2f}")
+
+        add_threshold = 0.6 # This could be configurable
+        if final_score > add_threshold: # No need to check if url in self.known_sources again, already did at the start
+            self.known_sources[url] = {"name": source_name, "score": final_score, "type": source_type}
+            self.log_source(source_name, url, final_score, True, query, self.stage)
+            logger.info(f"Added new source: {source_name} ({url}) with score {final_score:.2f}")
+            return {"name": source_name, "url": url, "score": final_score, "added": True, "type": source_type}
+        else:
+            self.log_source(source_name, url, final_score, False, query, self.stage, reason_if_not_added=f"Score {final_score:.2f} <= threshold {add_threshold}")
+            logger.info(f"Source {source_name} ({url}) not added. Score {final_score:.2f} below threshold {add_threshold}.")
+            return {"name": source_name, "url": url, "score": final_score, "added": False, "reason": f"Score {final_score:.2f} <= threshold {add_threshold}", "type": source_type}
 
     def prioritize_scraping(self):
         all_sources_for_stage = []
@@ -859,14 +894,19 @@ class PythonMasterAI(nn.Module):
         return self.generate_for_evaluation(input_text, "debug_code_placeholder", max_gen_length=100)
 
     def process_input(self, input_text, user_key):
-        response = requests.post("http://localhost:8000/master/auth", json={"key": user_key, "command": input_text})
-        if response.status_code == 200:
-            if response.json().get("action") == "pause":
-                self.reset_to_checkpoint()
-                return f"{self.stage.capitalize()} paused by Master’s stop code"
-            if "MASTER:" in input_text:
-                return f"Serving Master: {self.generate_response(input_text.replace('MASTER:', ''))}"
-        return self.generate_response(input_text)
+        master_auth_url = get_typed_config_value("master_service.auth_url", "http://localhost:8000/master/auth", str)
+        try:
+            response = requests.post(master_auth_url, json={"key": user_key, "command": input_text}, timeout=5)
+            if response.status_code == 200:
+                if response.json().get("action") == "pause":
+                    self.reset_to_checkpoint()
+                    return f"{self.stage.capitalize()} paused by Master’s stop code"
+                if "MASTER:" in input_text:
+                    return f"Serving Master: {self.generate_response(input_text.replace('MASTER:', ''))}"
+            return self.generate_response(input_text) # Default action if not a master command or auth fails non-critically
+        except requests.RequestException as e:
+            logger.error(f"Could not contact master authentication service at {master_auth_url}: {e}")
+            return "Error: Could not verify master key with authentication service. Proceeding with standard response." + self.generate_response(input_text)
 
     def reset_to_checkpoint(self):
         logger.info("Reverting to checkpoint")
@@ -895,6 +935,10 @@ class PythonMasterAI(nn.Module):
         ckpt_ai_state = checkpoint.get('ai_state')
         if not ckpt_ai_state:
             logger.error("Checkpoint is missing 'ai_state'. Cannot verify configuration or load.")
+            return False
+        # Add type check for ckpt_ai_state to help Pylance and for runtime safety
+        if not isinstance(ckpt_ai_state, dict):
+            logger.error(f"Checkpoint 'ai_state' is not a dictionary (type: {type(ckpt_ai_state)}). Cannot load.")
             return False
         ckpt_config_id = ckpt_ai_state.get('configuration_id')
         if self.configuration_id != ckpt_config_id:
@@ -929,7 +973,7 @@ class PythonMasterAI(nn.Module):
         self.stage = ckpt_ai_state.get('stage', self.stage)
         self.task_progress = defaultdict(float, ckpt_ai_state.get('task_progress', {})) # Changed from int to float
         self.knowledge_gaps = ckpt_ai_state.get('knowledge_gaps', [])
-        self.known_sources = ckpt_ai_state.get('known_sources', self.load_known_sources())
+        self.known_sources = ckpt_ai_state.get('known_sources', {}) # Default to empty dict
         self.performance_log = ckpt_ai_state.get('performance_log', [])
         self.research_log = ckpt_ai_state.get('research_log', [])
         self.source_log = ckpt_ai_state.get('source_log', [])
