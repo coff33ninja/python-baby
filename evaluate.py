@@ -16,8 +16,8 @@ if sys.platform == "win32":
 
 import torch
 import evaluate as hf_evaluate # Use the 'evaluate' library for metrics
-from RestrictedPython import compile_restricted, safe_globals
-from RestrictedPython.PrintCollector import PrintCollector # type: ignore
+from RestrictedPython import compile_restricted, safe_globals # type: ignore[import-untyped]
+from RestrictedPython.PrintCollector import PrintCollector
 
 from python_master_ai import PythonMasterAI
 from utils import get_config_value, setup_logging  # Added for config and logging
@@ -107,9 +107,8 @@ def _execute_restricted_code_target(
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
-        # Directly access printed_text and clear it, similar to PrintCollector.printed()
-        collected_text_from_restricted_print = "".join(_print_collector_instance._printed_text) # Access internal attribute
-        _print_collector_instance._printed_text = [] # Clear the list after getting value
+        # Use the public printed() method to get text and clear the collector
+        collected_text_from_restricted_print = _print_collector_instance.printed()
         results["stdout"] = collected_text_from_restricted_print + redirected_stdout_exec.getvalue()
 
         err_val = redirected_stderr_exec.getvalue()
