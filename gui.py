@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 import subprocess
 import sys
+import re
 import traceback
 import logging  # Added for logging
 from utils import (
@@ -106,24 +107,57 @@ def discover_sources():
         if new_sources
         else "No new sources discovered in this run.\n\n"
     )
+    logs = []
+    malformed_lines = 0
+    recovered_objects = 0
     try:
         with open("source_log.json", "r") as f:
-            logs = [json.loads(line) for line in f if line.strip()]
-        logger.info("Source log successfully read as JSONL (one JSON object per line).")
-        return (
-            discovered_message
-            + "Last 5 source log entries:\n"
-            + json.dumps(logs[-5:], indent=2)
+            for line in f:
+                if line.strip():
+                    try:
+                        logs.append(json.loads(line))
+                    except json.decoder.JSONDecodeError as e:
+                        s = line.strip()
+                        import re
+
+                        # This regex splits at every '}{' or '}{' (not inside strings)
+                        parts = re.split(r"}\s*{", s)
+                        if len(parts) > 1:
+                            for i, part in enumerate(parts):
+                                # Re-add braces removed by split
+                                if i == 0:
+                                    part = part + "}"
+                                elif i == len(parts) - 1:
+                                    part = "{" + part
+                                else:
+                                    part = "{" + part + "}"
+                                try:
+                                    logs.append(json.loads(part))
+                                    recovered_objects += 1
+                                except Exception as e2:
+                                    malformed_lines += 1
+                                    logger.warning(
+                                        f"Could not recover JSON object from split part: {e2}. Part: {part}"
+                                    )
+                        else:
+                            malformed_lines += 1
+                            logger.warning(
+                                f"Malformed JSON line in source_log.json: {e}. Line content: {line.strip()}"
+                            )
+        logger.info(
+            "Source log successfully read as JSONL (one JSON object per line, with recovery for concatenated objects)."
         )
+        msg = discovered_message + "Last 5 source log entries:\n" + json.dumps(
+            logs[-5:], indent=2
+        )
+        if malformed_lines > 0:
+            msg += f"\n\nWarning: {malformed_lines} malformed line(s) were skipped in source_log.json. Please check the file for corruption."
+        if recovered_objects > 0:
+            msg += f"\n\nNote: {recovered_objects} JSON object(s) were recovered from lines containing multiple concatenated objects."
+        return msg
     except FileNotFoundError:
         logger.error("source_log.json not found.")
         return discovered_message + "Error: source_log.json not found."
-    except json.decoder.JSONDecodeError as e:
-        logger.error(f"Malformed JSON in source_log.json: {e}", exc_info=True)
-        return (
-            discovered_message
-            + "Error: source_log.json is corrupted or contains malformed JSON. Please fix or delete the file."
-        )
     except Exception as e:
         logger.error(f"Error reading source_log.json: {e}", exc_info=True)
         return discovered_message + f"Error reading source_log.json: {e}"
@@ -493,9 +527,57 @@ def run_train_script_gui(stage, user_key, session_key_state):
     if not stage:
         logger.warning("Train script run attempted without selecting a stage.")
         return "Please select a stage for training."
+    # Always repair dataset structure before training
+    auto_repair_and_manage_datasets()
+    data_dir = os.path.join("data", stage)
+    # Get all available versions, newest first
+    version_dirs = [d for d in os.listdir(data_dir) if re.match(r"^\d{8}_\d{6}$", d) and os.path.isdir(os.path.join(data_dir, d))]
+    version_dirs.sort(reverse=True)
+    if not version_dirs:
+        return "No dataset versions found for this stage. Please upload data."
+    # Try training on each version, rolling back if error detected
+    for version in version_dirs:
+        # Set latest.txt to this version
+        latest_txt_path = os.path.join(data_dir, "latest.txt")
+        with open(latest_txt_path, "w", encoding="utf-8") as f:
+            f.write(version + "\n")
+        command = [sys.executable, "train.py", "--stage", stage]
+        result = run_script_in_background(
+            command, user_key, session_key_state, f"Training Script (train.py) [version {version}]"
+        )
+        # Check for error/knowledge gap in result (simple heuristic: look for 'cannot proceed', 'error', or 'knowledge gap')
+        if any(s in result.lower() for s in ["cannot proceed", "error", "knowledge gap", "no dataset version"]):
+            logger.warning(f"Training failed or knowledge gap detected for version {version}. Trying previous version if available.")
+            continue
+        # If training succeeded, return result
+        return result + f"\n[Trained on dataset version: {version}]"
+    # If all versions failed, trigger research ("google"), repair datasets, and retry latest
+    logger.warning("Training failed or knowledge gap detected for all available dataset versions. Triggering research and retrying training on latest version.")
+    model.conduct_research()  # This will 'google' for new sources
+    auto_repair_and_manage_datasets()  # Repair after research
+    # Get latest version again (in case new data was added)
+    version_dirs = [d for d in os.listdir(data_dir) if re.match(r"^\d{8}_\d{6}$", d) and os.path.isdir(os.path.join(data_dir, d))]
+    version_dirs.sort(reverse=True)
+    if not version_dirs:
+        return "No dataset versions found after research. Please upload or discover new data."
+    latest_version = version_dirs[0]
+    latest_txt_path = os.path.join(data_dir, "latest.txt")
+    with open(latest_txt_path, "w", encoding="utf-8") as f:
+        f.write(latest_version + "\n")
     command = [sys.executable, "train.py", "--stage", stage]
-    return run_script_in_background(
-        command, user_key, session_key_state, "Training Script (train.py)"
+    result = run_script_in_background(
+        command, user_key, session_key_state, f"Training Script (train.py) [version {latest_version} after research]"
+    )
+    if any(s in result.lower() for s in ["cannot proceed", "error", "knowledge gap", "no dataset version"]):
+        logger.error("Training still failed after research and retry. Human intervention may be required.")
+        return (
+            "Training failed or knowledge gap detected for all available dataset versions, even after research. "
+            "Please check your data, sources, or consider manual intervention.\n" + result
+        )
+    return (
+        result
+        + f"\n[Trained on dataset version: {latest_version} after research/googling]"
+        + "\nNote: Research was automatically triggered due to insufficient/inefficient data."
     )
 
 
@@ -1285,6 +1367,57 @@ with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
             inputs=[dm_stage_select, dm_selected_version_id_state],
             outputs=[dm_files_df],
         )
+
+def auto_repair_and_manage_datasets(stage_dir_base="data"):    
+    """
+    Scan all stage directories, ensure each versioned dataset dir has a manifest.json, and latest.txt points to the newest version.
+    Optionally, can be extended to archive used data and support rollback.
+    """
+    import os
+    import json
+    import re
+    if not os.path.isdir(stage_dir_base):
+        return
+    for stage in os.listdir(stage_dir_base):
+        stage_dir = os.path.join(stage_dir_base, stage)
+        if not os.path.isdir(stage_dir):
+            continue
+        # Find all versioned subdirs (YYYYMMDD_HHMMSS)
+        version_dirs = [d for d in os.listdir(stage_dir) if re.match(r"^\d{8}_\d{6}$", d) and os.path.isdir(os.path.join(stage_dir, d))]
+        if not version_dirs:
+            continue
+        version_dirs.sort()
+        latest_version = version_dirs[-1]
+        # Ensure manifest.json exists in each version dir
+        for vdir in version_dirs:
+            vdir_path = os.path.join(stage_dir, vdir)
+            manifest_path = os.path.join(vdir_path, "manifest.json")
+            if not os.path.exists(manifest_path):
+                txt_files = [f for f in os.listdir(vdir_path) if f.endswith(".txt")]
+                manifest = {
+                    "version_timestamp": vdir,
+                    "dataset_path_relative_to_stage_dir": vdir,
+                    "creation_event_type": "auto_repair",
+                    "stage_uploaded_for": stage,
+                    "uploaded_files_summary": {
+                        "count": len(txt_files),
+                        "original_filenames_provided": [],
+                        "saved_filenames_in_version_dir": txt_files,
+                    },
+                    "excluded_files": []
+                }
+                with open(manifest_path, "w", encoding="utf-8") as mf:
+                    json.dump(manifest, mf, indent=4)
+        # Ensure latest.txt exists and is correct
+        latest_txt_path = os.path.join(stage_dir, "latest.txt")
+        try:
+            with open(latest_txt_path, "w", encoding="utf-8") as f:
+                f.write(latest_version + "\n")
+        except Exception as e:
+            print(f"[auto_repair] Could not update latest.txt for {stage}: {e}")
+
+# Call at startup
+auto_repair_and_manage_datasets()
 
 logger.info("Launching Gradio interface...")
 iface.launch()
