@@ -3,11 +3,15 @@ import os
 import sys
 import logging  # Added for logging
 import logging.handlers  # Added for logging
+from typing import TypeVar, Type, Any # Added for TypeVar and Type
 
 CONFIG_FILE_PATH = "config.yaml"
 _config_cache: dict | None = None
 # Initialize logger at module level for use in load_config
 logger = logging.getLogger(__name__)
+
+_warned_missing_keys = set() # For get_config_value default usage
+_warned_type_conversion_failures = set() # For get_typed_config_value issues
 
 
 
@@ -72,11 +76,20 @@ def get_config_value(key_path: str, default=None):
     try:
         for key in keys:
             val = val[key]
+        # If value was found, reset warning for this key if it was previously warned as missing
+        if key_path in _warned_missing_keys:
+            _warned_missing_keys.remove(key_path)
+            logger.debug(f"Key '{key_path}' found in config, (was previously missing/defaulted).")
         return val if val is not None or default is None else default
     except (KeyError, TypeError):
+        if key_path not in _warned_missing_keys:
+            logger.warning(f"Key '{key_path}' not found in config or environment. Using default: {default}")
+            _warned_missing_keys.add(key_path)
+        else:
+            logger.debug(f"Key '{key_path}' not found (previously warned). Using default: {default}")
         return default
 
-
+_T_TYPED_HELPER = TypeVar('_T_TYPED_HELPER', float, int, str, bool)
 _logging_configured = False
 
 
@@ -93,6 +106,51 @@ def validate_config_schema(config_data: dict):
     if "logging" in config_data and not isinstance(config_data["logging"], dict):
         logger.warning("Configuration validation: 'logging' section should be a dictionary.")
     # Add more specific checks as needed
+
+def get_typed_config_value(key_path: str, default_value: _T_TYPED_HELPER, target_type: Type[_T_TYPED_HELPER]) -> _T_TYPED_HELPER:
+    """
+    Retrieves a configuration value and attempts to cast it to the target_type.
+    Logs warnings for conversion failures or unexpected types only once per key_path and target_type.
+    """
+    raw_value = get_config_value(key_path, default_value) # This already handles env vars and defaults from YAML
+    warn_tuple = (key_path, target_type.__name__)
+
+    # If raw_value is already the exact target type (and not a bool masquerading as int/float if target is int/float)
+    if isinstance(raw_value, target_type) and not (target_type in (int, float) and isinstance(raw_value, bool)):
+        if warn_tuple in _warned_type_conversion_failures:
+            logger.debug(f"Value for '{key_path}' is now correctly typed as {target_type.__name__} (was previously warned).")
+            _warned_type_conversion_failures.remove(warn_tuple)
+        return raw_value
+
+    # If raw_value is a type that can be directly converted (int, float, str, bool)
+    if isinstance(raw_value, (int, float, str, bool)):
+        try:
+            converted_value = target_type(raw_value)
+            if warn_tuple in _warned_type_conversion_failures: # If it was warned before but now converts fine
+                logger.debug(f"Value for '{key_path}' ('{str(raw_value)[:50]}') successfully converted to {target_type.__name__} (was previously warned).")
+                _warned_type_conversion_failures.remove(warn_tuple)
+            return converted_value
+        except (ValueError, TypeError) as e:
+            if warn_tuple not in _warned_type_conversion_failures:
+                logger.warning(
+                    f"Could not convert configured value '{str(raw_value)[:100]}' for key '{key_path}' to {target_type.__name__}: {e}. "
+                    f"Using default value: {default_value}"
+                )
+                _warned_type_conversion_failures.add(warn_tuple)
+            else: # Already warned
+                logger.debug(f"Could not convert '{str(raw_value)[:100]}' for '{key_path}' to {target_type.__name__} (previously warned). Using default: {default_value}")
+            return default_value
+    else: # raw_value is some other unexpected type (e.g., dict, list)
+        if warn_tuple not in _warned_type_conversion_failures:
+            logger.warning(
+                f"Configuration value for '{key_path}' is of unexpected type: {type(raw_value)} (value: '{str(raw_value)[:100]}'). "
+                f"Using default value: {default_value}"
+            )
+            _warned_type_conversion_failures.add(warn_tuple)
+        else: # Already warned
+            logger.debug(f"Config value for '{key_path}' is of unexpected type {type(raw_value)} (previously warned). Using default: {default_value}")
+        return default_value
+
 
 def setup_logging():
     global _logging_configured
