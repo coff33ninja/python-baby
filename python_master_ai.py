@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 import os # type: ignore
 import glob # Added for checkpoint loading
 from utils import get_config_value, get_typed_config_value # Updated import
-from typing import Dict, List, Optional, TypeVar, Type, cast # Added for Optional type hint and helper
+from typing import Dict, List, Optional, cast # Added for Optional type hint and helper
 import logging
 
 # --- Initialize logger for this module ---
@@ -577,14 +577,7 @@ class PythonMasterAI(nn.Module):
 
     def get_research_scrape_targets(self):
         queries = self.formulate_research_queries()
-        scrape_targets_dict = {}
         unique_urls_to_scrape = set()
-
-        # Initialize variables for the source discovery logic block if it's intended to be here.
-        # Note: This duplicates discovery logic from discover_new_sources().
-        newly_added_sources_info = []
-        new_sources_added_count = 0
-        evaluated_urls_this_cycle = set()
 
         # Add sources based on dynamic queries
         if queries:
@@ -788,7 +781,6 @@ class PythonMasterAI(nn.Module):
         queries = self.formulate_research_queries()
         newly_added_sources_info = []
         new_sources_added_count = 0
-        evaluated_urls_this_cycle = set() # To avoid re-evaluating the same URL in this cycle
 
         if not queries:
             logger.info("No research queries formulated, skipping source discovery.")
