@@ -11,3 +11,4 @@ performance_log.json
 .coverage
 source_log.json
 source_log.json
+reports/pytest/junit.xml
