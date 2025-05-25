@@ -184,31 +184,12 @@ def test_execute_code_modifying_restricted_globals_fails_safely():
     print(f"Stdout: {stdout}")
     print(f"Stderr: {stderr}")
 
-    # Depending on RestrictedPython's behavior with the current guards for reassigning globals:
-    # 1. If it fails (e.g. a stricter _write_ guard or if RestrictedPython itself prevents it):
-    #    assert passed is False
-    #    assert "error" in log.lower() or "error" in stderr.lower()
-    # 2. If it passes (meaning the re-assignment was contained or didn't affect the test's 'len'):
-    #    assert passed is True
-    #    assert "Execution completed" in log
-    # Given the current basic _write_ guard and how RestrictedPython handles scope,
-    # the 'len' in `assert len([]) == 0` within the test string will still refer to the
-    # original builtin 'len' provided in restricted_globals['__builtins__'], not the one
-    # modified in the 'code' string's scope.
-    # Given the current basic _write_ guard (`_write_ = lambda x: x`) in evaluate.py
-    # and how RestrictedPython handles scope, the 'len' in `assert len([]) == 0`
-    # within the test string will still refer to the original builtin 'len'
-    # provided in restricted_globals['__builtins__'], not the one modified in the
-    # 'code' string's scope. The assignment `len = ...` in `code` creates a local
-    # variable `len` within the scope of `code`'s execution, which does not
-    # override the `len` available to the `tests` string's execution context.
-    # and how RestrictedPython handles scopes for `exec` calls:
-    # The `code` string and `tests_string` are executed in the same `local_scope`.
-    # However, `RestrictedPython`'s compilation and execution model, along with the
-    # `safe_globals` provided, means that builtins like `len` accessed in the `tests_string`
-    # will typically resolve to the ones in `safe_globals['__builtins__']` unless
-    # the `local_scope` explicitly shadows them in a way that `compile_restricted` allows
-    # and the test execution picks up. The current behavior is that the original `len` is used.
+    # The assignment `len = ...` in the `code` string creates a local variable `len`
+    # within that execution's scope due to RestrictedPython's handling and the current
+    # permissive `_write_` guard in evaluate.py (`_write_ = lambda x: x`).
+    # This local `len` does not override the builtin `len` available to the
+    # `tests_string` execution context, which still resolves to the `len` from
+    # `safe_globals['__builtins__']`. Thus, the assertion uses the original `len`.
     assert (
         passed is True
     ), "Test should pass as the overwrite of 'len' is contained in its scope."
