@@ -342,9 +342,12 @@ def test_setup_logging_basic_and_config(mock_get_config, caplog, tmp_path, clear
     
     log_file_path = tmp_path / "test_app.log"
     def side_effect_get_config(key, default):
-        if key == "logging.log_file": return str(log_file_path)
-        if key == "logging.console_level": return "INFO"
-        if key == "logging.file_level": return "DEBUG"
+        if key == "logging.log_file":
+            return str(log_file_path)
+        if key == "logging.console_level":
+            return "INFO"
+        if key == "logging.file_level":
+            return "DEBUG"
         return default # Should not be called for these keys in this test
     mock_get_config.side_effect = side_effect_get_config
 
@@ -377,8 +380,10 @@ def test_setup_logging_basic_and_config(mock_get_config, caplog, tmp_path, clear
     assert "Logging setup complete." not in caplog.text # utils.py logs this only once due to _logging_configured
 
     # Cleanup log file and handlers
-    if file_handler: file_handler.close()
-    if console_handler: console_handler.close()
+    if file_handler:
+        file_handler.close()
+    if console_handler:
+        console_handler.close()
     # Clear all handlers to avoid interference between parametrized runs
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
@@ -391,9 +396,12 @@ def test_setup_logging_invalid_config_types(mock_get_config, capfd, tmp_path):
     utils._logging_configured = False
 
     def side_effect_bad_types(key, default):
-        if key == "logging.log_file": return 123 # Bad type
-        if key == "logging.console_level": return True
-        if key == "logging.file_level": return {}
+        if key == "logging.log_file":
+            return 123 # Bad type
+        if key == "logging.console_level":
+            return True
+        if key == "logging.file_level":
+            return {}
         return default
     mock_get_config.side_effect = side_effect_bad_types
 
@@ -464,8 +472,15 @@ def test_get_typed_config_value_logic(mock_get_raw_config, caplog):
 
     # Conversion failure - warn only once
     mock_get_raw_config.return_value = "still-not-an-int" # Same key, different raw value
+    caplog.clear() # Clear previous logs before this specific check
     assert get_typed_config_value("test.bad_int", 99, int) == 99
-    assert "Could not convert" not in caplog.text # Not logged as warning again
+    found_new_warning = False
+    for record in caplog.records:
+        if record.levelname == "WARNING" and \
+        "Could not convert configured value 'still-not-an-int' for key 'test.bad_int' to int" in record.message:
+            found_new_warning = True
+            break
+    assert not found_new_warning, "A new WARNING for conversion failure was logged, but it should have been a DEBUG message."
     assert "previously warned" in caplog.text # Debug log
     caplog.clear()
     utils._warned_type_conversion_failures.clear()

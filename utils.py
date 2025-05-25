@@ -3,7 +3,7 @@ import os
 import sys
 import logging  # Added for logging
 import logging.handlers  # Added for logging
-from typing import TypeVar, Type, Any # Added for TypeVar and Type
+from typing import TypeVar, Type # Added for TypeVar and Type
 
 CONFIG_FILE_PATH = "config.yaml"
 _config_cache: dict | None = None
@@ -203,9 +203,10 @@ def setup_logging():
         logging.DEBUG
     )  # Set root logger level to the lowest of all handlers
 
-    # Prevent duplicate messages if this function is called multiple times (e.g., in tests)
+    # Clear existing handlers to avoid duplicates
     if root_logger.hasHandlers():
-        root_logger.handlers.clear()
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
 
     # Console Handler
     console_handler = logging.StreamHandler(sys.stdout)  # Explicitly use sys.stdout
