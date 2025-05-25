@@ -1,5 +1,6 @@
 # train.py
 from torch.optim import Adam
+from torch.optim.lr_scheduler import StepLR # Added for learning rate scheduling
 from torch.utils.data import DataLoader, Dataset as TorchDataset
 import torch.nn as nn
 from python_master_ai import PythonMasterAI
@@ -13,44 +14,13 @@ import torch
 import json
 import glob
 import logging  # Added for logging
-from utils import get_config_value, setup_logging  # Added for config and logging
+from utils import get_typed_config_value, setup_logging, get_config_value # Updated import
 
 # --- Initialize logger for this module ---
 # Note: setup_logging() will be called in if __name__ == "__main__" or by an importing module.
 # If this script is run directly, logging might be unconfigured until main().
 # If imported, the importing module should have configured logging.
 logger = logging.getLogger(__name__)
-
-# --- Helper function for typed config values ---
-_T = TypeVar('_T', float, int)
-
-def _get_typed_config_value(
-    key: str,
-    default_value: _T,
-    target_type: Type[_T]
-) -> _T:
-    val = get_config_value(key, default_value)
-
-    # If val is already the exact target type (and not a bool masquerading as int)
-    if isinstance(val, target_type) and not (target_type is int and isinstance(val, bool)):
-        return val
-
-    # If val is a type that can be directly converted (int, float, str)
-    if isinstance(val, (int, float, str)):
-        try:
-            return target_type(val) # Attempt conversion
-        except (ValueError, TypeError) as e:
-            logger.warning(
-                f"Could not convert configured value '{str(val)[:100]}' for key '{key}' to {target_type.__name__}: {e}. "
-                f"Using default value: {default_value}"
-            )
-            return default_value
-    else: # val is some other unexpected type (e.g., dict, list)
-        logger.warning(
-            f"Configuration value for '{key}' is of unexpected type: {type(val)} (value: '{str(val)[:100]}'). "
-            f"Using default value: {default_value}"
-        )
-        return default_value
 
 # --- Initialize Model, Tokenizer, Optimizer with config values ---
 # These are initialized at the module level because they might be used by main or helper functions.
@@ -63,8 +33,13 @@ if tokenizer.pad_token is None: # Ensure pad_token is set for tokenizer
     logger.info("Tokenizer pad_token set to eos_token as it was None.")
 
 
-default_lr = _get_typed_config_value("training_defaults.learning_rate", 1e-4, float)
+default_lr = get_typed_config_value("training_defaults.learning_rate", 1e-4, float)
 optimizer = Adam(model.parameters(), lr=default_lr)
+
+# Learning Rate Scheduler
+lr_scheduler_step_size = get_typed_config_value("training_defaults.lr_scheduler.step_size", 1, int)
+lr_scheduler_gamma = get_typed_config_value("training_defaults.lr_scheduler.gamma", 0.7, float)
+scheduler = StepLR(optimizer, step_size=lr_scheduler_step_size, gamma=lr_scheduler_gamma)
 # logger.info(f"Initialized Adam optimizer with learning rate: {default_lr}") # Logger might not be set up yet if not main
 
 CHECKPOINT_DIR = str(get_config_value("checkpointing.checkpoint_dir", "checkpoints"))
@@ -219,8 +194,10 @@ def train(stage: str):
     current_loss_value = None
     total_steps = 0  # For TensorBoard global_step
 
-    num_epochs = _get_typed_config_value("training_defaults.num_epochs", 5, int)
-    batch_size = _get_typed_config_value("training_defaults.batch_size", 4, int)
+    num_epochs = get_typed_config_value("training_defaults.num_epochs", 5, int)
+    batch_size = get_typed_config_value("training_defaults.batch_size", 4, int)
+    gradient_clipping_norm = get_typed_config_value("training_defaults.gradient_clipping_norm", 1.0, float)
+
     logger.info(
         f"Starting training for {num_epochs} epochs with batch size {batch_size}."
     )
@@ -246,6 +223,10 @@ def train(stage: str):
                 outputs.view(-1, outputs.size(-1)), inputs["input_ids"].view(-1)
             )
             loss.backward()
+            
+            if gradient_clipping_norm > 0: # Apply gradient clipping if configured
+                torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clipping_norm)
+
             optimizer.step()
 
             loss_item = loss.item()
@@ -274,6 +255,10 @@ def train(stage: str):
             writer.add_scalar(
                 f"Training/Epoch_Avg_Loss_Stage_{stage}", avg_epoch_loss, epoch + 1
             )
+            writer.add_scalar(
+                f"Training/Learning_Rate_Stage_{stage}", scheduler.get_last_lr()[0], epoch + 1
+            )
+        scheduler.step() # Step the learning rate scheduler
 
         os.makedirs(CHECKPOINT_DIR, exist_ok=True)
         ai_state_for_checkpoint = model.get_state_for_checkpoint()
