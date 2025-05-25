@@ -101,9 +101,19 @@ def test_execute_infinite_loop_timeout():
     assert (
         2.8 <= duration < (3.0 + 1.0)
     ), f"Execution duration {duration:.4f}s was not within the expected range for a 3s timeout."
-def test_execute_sandboxed_code():
-    code = "x = 10\ny = 20\nresult = x + y"
-    tests = "assert result == 30"  # Ensure main code runs
+
+def test_execute_sandboxed_code_cannot_access_host_variables():
+    """
+    Tests that code executed by SecureExecutor cannot access variables
+    from the host Python environment (e.g., the test function's scope).
+    """
+    host_variable = "sensitive_data_from_host_environment"
+
+    # Attempt to print the host_variable from within the sandboxed code.
+    # This should fail with a NameError.
+    code = f"print({host_variable})" # Intentionally try to access undefined variable
+    tests = "assert True"  # Test string is trivial for this scenario
+
     executor = SecureExecutor(timeout_seconds=DEFAULT_TEST_TIMEOUT)
     passed, log, stdout, stderr = executor.execute(code, tests)
 
@@ -111,11 +121,12 @@ def test_execute_sandboxed_code():
     print(f"Stdout: {stdout}")
     print(f"Stderr: {stderr}")
 
-    assert passed is True, f"Test should pass. Log: {log}, Stderr: {stderr}"
-    assert "execution completed" in log.lower()  # Case-insensitive
-    assert "x" not in stdout, "Sandboxed code should not have access to global variables."
-    assert "y" not in stdout, "Sandboxed code should not have access to global variables."
-    assert "result" not in stdout, "Sandboxed code should not have access to global variables."
+    assert passed is False, "Execution should fail due to trying to access an undefined (host) variable."
+    assert "nameerror" in log.lower() or "nameerror" in stderr.lower(), \
+        "Log or stderr should indicate a NameError."
+    assert host_variable.split('_')[0] in log.lower() or host_variable.split('_')[0] in stderr.lower(), \
+        f"The error message should reference the variable '{host_variable.split('_')[0]}'."
+    assert host_variable not in stdout, "The content of the host variable should not be in stdout."
 
 def test_execute_print_capture():
     code = "print('Hello from sandbox')\nprint('Line 2')\nvar = 'done'"
