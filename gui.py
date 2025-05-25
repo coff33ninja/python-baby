@@ -374,6 +374,20 @@ def run_scrape_data_script_gui(stage, sources_str, urls_str, user_key, session_k
     command = [sys.executable, "scrape_data.py", stage] + [item for pair in zip(sources_list, urls_list) for item in pair]
     return run_script_in_background(command, user_key, session_key_state, "Scraping Script (scrape_data.py)")
 
+def run_evaluate_script_gui(model_checkpoint_path, eval_dataset_path, selected_stage_option, user_key, session_key_state):
+    logger.info(f"Evaluation script run requested via GUI. Checkpoint: {model_checkpoint_path}, Dataset: {eval_dataset_path}, Stage Option: {selected_stage_option}")
+    if not model_checkpoint_path:
+        return "Please provide the path to the model checkpoint."
+    if not eval_dataset_path:
+        return "Please provide the path to the evaluation dataset (.jsonl file)."
+
+    command = [sys.executable, "evaluate.py", "--model_checkpoint_path", model_checkpoint_path, "--eval_dataset_path", eval_dataset_path]
+    # Only add the --stage argument if a specific stage is selected (not the "Evaluate All Stages" option)
+    if selected_stage_option and selected_stage_option != "(Evaluate All Stages)":
+        command.extend(["--stage", selected_stage_option])
+
+    return run_script_in_background(command, user_key, session_key_state, "Evaluation Script (evaluate.py)")
+
 def load_latest_model_from_checkpoint_gui(user_key, session_key_state):
     logger.info("Load latest model from checkpoint requested via GUI.")
 
@@ -685,6 +699,20 @@ with gr.Blocks(title="PythonMasterAI: Serving Master Daddy") as iface:
         scrape_run_button = gr.Button("Start Scraper Script")
         scrape_run_output = gr.Textbox(label="Scraper Script Output", lines=10, interactive=False)
         scrape_run_button.click(run_scrape_data_script_gui, inputs=[scrape_stage_select, scrape_sources_input, scrape_urls_input, master_key_input_global, session_master_key], outputs=scrape_run_output)
+
+    with gr.Tab("Run Evaluation Script"):
+        gr.Markdown("Run the `evaluate.py` script against a specified model checkpoint and evaluation dataset. This will execute in a separate process.")
+        eval_checkpoint_path_input = gr.Textbox(label="Model Checkpoint Path (.pt)", placeholder="e.g., checkpoints/model_stage_baby_config_xxxx_latest.pt")
+        eval_dataset_path_input = gr.Textbox(label="Evaluation Dataset Path (.jsonl)", placeholder="e.g., sample_evaluation_dataset.jsonl or custom_eval_data.jsonl")
+        eval_stage_choices = ["(Evaluate All Stages)"] + available_stages
+        eval_stage_select = gr.Dropdown(
+            choices=eval_stage_choices,
+            label="Select Stage to Filter (Optional)",
+            value="(Evaluate All Stages)") # Default to evaluating all
+        eval_run_button = gr.Button("Start Evaluation Script")
+        eval_run_output = gr.Textbox(label="Evaluation Script Output", lines=10, interactive=False)
+        eval_run_button.click(run_evaluate_script_gui, inputs=[eval_checkpoint_path_input, eval_dataset_path_input, eval_stage_select, master_key_input_global, session_master_key], outputs=eval_run_output)
+
     with gr.Tab("Model Management"):
         gr.Markdown("Manage model checkpoints. Note: The model automatically attempts to load the latest compatible checkpoint on startup.")
         load_checkpoint_button = gr.Button("Load Latest Model from Checkpoint for Current Stage & Configuration")
