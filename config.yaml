@@ -55,3 +55,12 @@ gui_settings:
     max_bytes: 1048576  # Maximum bytes to read from a file for preview in the GUI (e.g., 1MB).
     max_lines: 200      # Maximum lines to display from a file for preview in the GUI.
   script_execution_timeout: 3600 # Timeout in seconds for scripts (train.py, scrape_data.py) run from the GUI. Default: 1 hour.
+
+growth:
+  master_approval_url: "http://localhost:8000/master/auth" # URL for master key service
+  strategy:
+    parameter: "n_layers"  # Which model parameter to change (e.g., "n_layers", "n_heads", "hidden_size")
+                           # Note: PythonMasterAI.__init__ currently best handles 'n_layers' growth.
+                           # Other parameters would require more sophisticated weight transfer logic there.
+    increment: 1           # Additive value for integer parameters
+    factor: 1.0            # Multiplicative factor (e.g., 1.2 for 20% increase, 1.0 for no multiplicative change)

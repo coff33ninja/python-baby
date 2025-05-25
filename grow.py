@@ -6,38 +6,13 @@ from torch.optim import Adam
 import os
 import logging  # Added for logging
 from typing import TypeVar, Type # Added for helper
-from utils import get_config_value, setup_logging  # Added for config and logging
+from utils import get_typed_config_value, setup_logging, get_config_value  # Updated import
 
 # --- Initialize logger for this module ---
 logger = logging.getLogger(__name__)
 
 MASTER_KEY = PythonMasterAI.MASTER_KEY
-
-# --- Helper function for typed config values (local to this module) ---
-_T_HELPER = TypeVar('_T_HELPER', float, int, str, bool)
-
-def _get_typed_config_value(key: str, default_value: _T_HELPER, target_type: Type[_T_HELPER]) -> _T_HELPER:
-    val = get_config_value(key, default_value) # get_config_value from utils returns Any
-    # If val is already the exact target type (and not a bool masquerading as int/float if target is int/float)
-    if isinstance(val, target_type) and not (target_type in (int, float) and isinstance(val, bool)):
-        return val
-    # If val is a type that can be directly converted (int, float, str, bool)
-    if isinstance(val, (int, float, str, bool)):
-        try:
-            return target_type(val) # Attempt conversion
-        except (ValueError, TypeError) as e:
-            logger.warning(
-                f"Could not convert configured value '{str(val)[:100]}' for key '{key}' to {target_type.__name__}: {e}. "
-                f"Using default value: {default_value}"
-            )
-            return default_value
-    else: # val is some other unexpected type (e.g., dict, list)
-        logger.warning(
-            f"Configuration value for '{key}' is of unexpected type: {type(val)} (value: '{str(val)[:100]}'). "
-            f"Using default value: {default_value}"
-        )
-        return default_value
-CHECKPOINT_DIR = _get_typed_config_value("checkpointing.checkpoint_dir", "checkpoints", str)
+CHECKPOINT_DIR = get_typed_config_value("checkpointing.checkpoint_dir", "checkpoints", str)
 # logger.info(f"Using checkpoint directory: {CHECKPOINT_DIR}") # Logged in main if run directly
 
 
@@ -54,9 +29,10 @@ def grow_model(current_model: PythonMasterAI):
         return current_model, None
 
     # --- Master Approval ---
+    master_approval_url = get_typed_config_value("growth.master_approval_url", "http://localhost:8000/master/auth", str)
     try:
         response = requests.post(
-            "http://localhost:8000/master/auth",
+            master_approval_url,
             json={"key": MASTER_KEY, "command": "APPROVE_GROWTH"},
         )
         response.raise_for_status()
@@ -75,9 +51,35 @@ def grow_model(current_model: PythonMasterAI):
     logger.info("Master approval received. Proceeding with model growth...")
 
     # --- Determine New Configuration ---
-    new_n_layers = current_model.n_layers + 1
+    # Default growth strategy: increment n_layers
+    growth_strategy_param = get_typed_config_value("growth.strategy.parameter", "n_layers", str)
+    growth_strategy_increment = get_typed_config_value("growth.strategy.increment", 1, int)
+    growth_strategy_factor = get_typed_config_value("growth.strategy.factor", 1.0, float) # For multiplicative growth
+
+    new_config_params = {
+        "vocab_size": current_model.vocab_size,
+        "n_layers": current_model.n_layers,
+        "n_heads": current_model.n_heads,
+        "hidden_size": current_model.hidden_size,
+        "dropout": current_model.dropout,
+        "dim_feedforward": current_model.dim_feedforward,
+        "activation": current_model.activation,
+    }
+
+    if growth_strategy_param in new_config_params:
+        current_val = new_config_params[growth_strategy_param]
+        if isinstance(current_val, int):
+            new_config_params[growth_strategy_param] = int(current_val * growth_strategy_factor) + growth_strategy_increment
+        elif isinstance(current_val, float): # e.g. dropout
+            new_config_params[growth_strategy_param] = (current_val * growth_strategy_factor) + growth_strategy_increment # Factor might be more relevant for floats
+        logger.info(f"Applying growth strategy: '{growth_strategy_param}' changed from {current_val} to {new_config_params[growth_strategy_param]}.")
+    else:
+        logger.warning(f"Growth strategy parameter '{growth_strategy_param}' not found in model config. Defaulting to incrementing n_layers.")
+        new_config_params["n_layers"] = current_model.n_layers + 1 # Fallback
+
     logger.info(
-        f"Current model: {current_model.n_layers} layers. New model will have: {new_n_layers} layers."
+        f"Current model config: n_layers={current_model.n_layers}, n_heads={current_model.n_heads}, hidden_size={current_model.hidden_size}. "
+        f"New model target config: n_layers={new_config_params['n_layers']}, n_heads={new_config_params['n_heads']}, hidden_size={new_config_params['hidden_size']}."
     )
 
     # --- Create New Model Instance with Weight Transfer ---
@@ -91,16 +93,7 @@ def grow_model(current_model: PythonMasterAI):
     # PythonMasterAI's __init__ will use its own config defaults if specific values are not passed
     grown_model = PythonMasterAI(
         # vocab_size, n_heads, hidden_size, dropout, activation are taken from config by default in PythonMasterAI.__init__
-        # Only specify parameters that are changing or need to be explicitly copied if they are not default.
-        # Here, we assume the new model largely inherits architecture except for n_layers.
-        # If those were also configurable per-growth-step, they'd be fetched from config here.
-        vocab_size=current_model.vocab_size,  # Explicitly copy from old model
-        n_layers=new_n_layers,  # This is the change for growth
-        n_heads=current_model.n_heads,  # Explicitly copy
-        hidden_size=current_model.hidden_size,  # Explicitly copy
-        dropout=current_model.dropout,  # Explicitly copy
-        dim_feedforward=current_model.dim_feedforward,  # Explicitly copy
-        activation=current_model.activation,  # Explicitly copy
+        **new_config_params, # Pass all potentially modified parameters
         previous_model_state_dict=current_model.state_dict(),
         previous_model_config=previous_config,
     )
@@ -117,7 +110,7 @@ def grow_model(current_model: PythonMasterAI):
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     # Optimizer learning rate from config for the new optimizer
-    default_lr = _get_typed_config_value("training_defaults.learning_rate", 1e-4, float)
+    default_lr = get_typed_config_value("training_defaults.learning_rate", 1e-4, float)
     new_optimizer = Adam(grown_model.parameters(), lr=default_lr)
     logger.info(
         f"Created new Adam optimizer for grown model with learning rate: {default_lr}"
