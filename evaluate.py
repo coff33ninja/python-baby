@@ -15,41 +15,16 @@ if sys.platform == "win32":
     multiprocessing.freeze_support()
 
 import torch
-import evaluate as hf_evaluate # Use the 'evaluate' library for metrics
+import evaluate as hf_evaluate # Use the 'evaluate' library for metrics # type: ignore
 from RestrictedPython import compile_restricted, safe_globals # type: ignore[import-untyped]
 from RestrictedPython.PrintCollector import PrintCollector
 
 from python_master_ai import PythonMasterAI
-from utils import get_config_value, setup_logging  # Added for config and logging
-from typing import Optional, Type, TypeVar # Added for helper and casting
+from utils import get_typed_config_value, setup_logging  # Updated import
+from typing import Optional # Added for helper and casting
 
 # --- Initialize logger for this module ---
 logger = logging.getLogger(__name__)
-
-# --- Helper function for typed config values (local to this module) ---
-_T_HELPER = TypeVar('_T_HELPER', float, int, str, bool)
-
-def _get_typed_config_value(key: str, default_value: _T_HELPER, target_type: Type[_T_HELPER]) -> _T_HELPER:
-    val = get_config_value(key, default_value) # get_config_value from utils returns Any
-    # If val is already the exact target type (and not a bool masquerading as int/float if target is int/float)
-    if isinstance(val, target_type) and not (target_type in (int, float) and isinstance(val, bool)):
-        return val
-    # If val is a type that can be directly converted (int, float, str, bool)
-    if isinstance(val, (int, float, str, bool)):
-        try:
-            return target_type(val) # Attempt conversion
-        except (ValueError, TypeError) as e:
-            logger.warning(
-                f"Could not convert configured value '{str(val)[:100]}' for key '{key}' to {target_type.__name__}: {e}. "
-                f"Using default value: {default_value}"
-            )
-            return default_value
-    else: # val is some other unexpected type (e.g., dict, list)
-        logger.warning(
-            f"Configuration value for '{key}' is of unexpected type: {type(val)} (value: '{str(val)[:100]}'). "
-            f"Using default value: {default_value}"
-        )
-        return default_value
 
 # --- Secure Code Execution Target Function (for multiprocessing) ---
 def _execute_restricted_code_target(
@@ -124,7 +99,7 @@ def _execute_restricted_code_target(
 # --- Secure Executor Class ---
 class SecureExecutor:
     def __init__(self, timeout_seconds=None):
-        default_timeout = _get_typed_config_value("evaluation.secure_exec_timeout", 10, int)
+        default_timeout = get_typed_config_value("evaluation.secure_exec_timeout", 10, int)
         self.timeout_seconds = (
             timeout_seconds if timeout_seconds is not None else default_timeout
         )
@@ -208,11 +183,11 @@ def calculate_text_metrics(predictions: list[str], references: list[list[str]]):
 
 
 def main():
-    default_output_dir = _get_typed_config_value("evaluation.results_dir", "eval_results", str)
-    default_dataset_path = _get_typed_config_value(
+    default_output_dir = get_typed_config_value("evaluation.results_dir", "eval_results", str)
+    default_dataset_path = get_typed_config_value(
         "evaluation.default_eval_dataset", "sample_evaluation_dataset.jsonl"
     , str)
-    default_timeout_main = _get_typed_config_value("evaluation.secure_exec_timeout", 10, int)
+    default_timeout_main = get_typed_config_value("evaluation.secure_exec_timeout", 10, int)
 
     parser = argparse.ArgumentParser(description="Evaluate PythonMasterAI model.")
     parser.add_argument(
@@ -293,6 +268,8 @@ def main():
                 task_type = task_data.get("task_type")
                 prompt = task_data.get("prompt")
                 task_stage = task_data.get("stage")
+                task_version = task_data.get("task_version", "N/A")
+                source_origin = task_data.get("source_origin", "N/A")
 
                 # Filter by stage if --stage argument is provided
                 if args.stage and task_stage != args.stage:
@@ -340,6 +317,8 @@ def main():
                     "task_id": task_id,
                     "task_type": task_type,
                     "prompt": prompt,
+                    "task_version": task_version,
+                    "source_origin": source_origin,
                     "generated_output": generated_output,
                 }
                 if task_type == "code_generation":
