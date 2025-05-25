@@ -2,6 +2,7 @@ import pytest
 import yaml
 import os
 import logging
+from unittest.mock import patch # Add this import
 import logging.handlers
 from utils import (
     load_config,

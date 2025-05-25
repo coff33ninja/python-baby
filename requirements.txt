@@ -28,5 +28,6 @@ PyYAML
 
 # Testing
 pytest
+pytest-cov
 evaluate
 tenacity
