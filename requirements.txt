@@ -31,3 +31,5 @@ pytest
 pytest-cov
 evaluate
 tenacity
+protobuf
+tensorboard

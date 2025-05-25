@@ -82,8 +82,8 @@ def _execute_restricted_code_target(
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
-        # Use the public printed() method to get text and clear the collector
-        collected_text_from_restricted_print = _print_collector_instance.printed()
+        # Use the public printed property to get text and clear the collector
+        collected_text_from_restricted_print = _print_collector_instance.printed
         results["stdout"] = collected_text_from_restricted_print + redirected_stdout_exec.getvalue()
 
         err_val = redirected_stderr_exec.getvalue()
