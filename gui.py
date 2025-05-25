@@ -70,8 +70,13 @@ def trigger_research():
         logger.info("Research log successfully read.")
         return json.dumps(logs[-5:], indent=2)
     except FileNotFoundError:
-        logger.error("research_log.json not found.")
-        return "Error: research_log.json not found."
+        logger.warning("research_log.json not found. Creating an empty research_log.json file.")
+        with open("research_log.json", "w") as f:
+            pass  # Create an empty file
+        return json.dumps([], indent=2) + "\n[No research log found yet. An empty research_log.json file has been created. It will be populated after the first research run.]"
+    except json.decoder.JSONDecodeError as e:
+        logger.error(f"Malformed JSON in research_log.json: {e}", exc_info=True)
+        return "Error: research_log.json is corrupted or contains malformed JSON. Please fix or delete the file."
     except Exception as e:
         logger.error(f"Error reading research_log.json: {e}", exc_info=True)
         return f"Error reading research_log.json: {e}"
@@ -83,12 +88,15 @@ def discover_sources():
     discovered_message = f"Discovered sources in this run: {new_sources}\n\n" if new_sources else "No new sources discovered in this run.\n\n"
     try:
         with open("source_log.json", "r") as f:
-            logs = json.load(f)
-        logger.info("Source log successfully read as a single JSON object/array.")
+            logs = [json.loads(line) for line in f if line.strip()]
+        logger.info("Source log successfully read as JSONL (one JSON object per line).")
         return discovered_message + "Last 5 source log entries:\n" + json.dumps(logs[-5:], indent=2)
     except FileNotFoundError:
         logger.error("source_log.json not found.")
         return discovered_message + "Error: source_log.json not found."
+    except json.decoder.JSONDecodeError as e:
+        logger.error(f"Malformed JSON in source_log.json: {e}", exc_info=True)
+        return discovered_message + "Error: source_log.json is corrupted or contains malformed JSON. Please fix or delete the file."
     except Exception as e:
         logger.error(f"Error reading source_log.json: {e}", exc_info=True)
         return discovered_message + f"Error reading source_log.json: {e}"
