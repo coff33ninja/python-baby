@@ -1,11 +1,12 @@
 # d:\Scripts\python-baby\tests\test_grow.py
-import pytest
+import pytest  # type: ignore
 import torch
 import torch.nn as nn # Import nn for nn.ModuleList
 from unittest.mock import patch, MagicMock
 import copy
 import requests # For requests.RequestException
 
+# Adjust import path based on how pytest discovers modules
 # Adjust import path based on how pytest discovers modules
 # This assumes 'python-baby' is in PYTHONPATH or tests are run from 'python-baby' root
 from python_master_ai import PythonMasterAI
@@ -106,13 +107,28 @@ def test_grow_model_master_approval_denied_action(base_model):
             )
 
 @patch('python_master_ai.PythonMasterAI.update_stage') # Patch at class level
-def test_grow_model_success_with_existing_layers(mock_update_stage_on_new_model, base_model):
+@patch('utils.get_typed_config_value') # To mock config access for checkpoint_dir
+def test_grow_model_success_with_existing_layers(mock_get_typed_config, mock_update_stage_on_new_model, base_model, tmp_path):
     """Test successful model growth when encoder has existing layers."""
     mock_response = mock_requests_post_response(status_code=200, json_data={"action": "grow"})
+
+    # --- Arrange ---
+    # Mock config for CHECKPOINT_DIR to use tmp_path
+    mock_checkpoint_dir = tmp_path / "checkpoints"
+    def config_side_effect(key, default=None, type_hint=None): # Match expected signature
+        if key == "checkpointing.checkpoint_dir":
+            return str(mock_checkpoint_dir)
+        elif key == "training.growth_strategy_factor": # Used by grow_model
+            return 2.0
+        elif key == "training.growth_increment": # Used by grow_model
+            return 1
+        return default
+    mock_get_typed_config.side_effect = config_side_effect
 
     with patch.object(base_model, 'assess_performance', return_value={"needs_growth": True}):
         with patch('grow.requests.post', return_value=mock_response) as mock_post:
             initial_n_layers = base_model.n_layers
+            initial_model_config_id = base_model.configuration_id
             assert initial_n_layers > 0, "Model should have initial layers for this test"
 
             last_layer_state_dict_from_old_model = copy.deepcopy(base_model.transformer.encoder.layers[-1].state_dict())
@@ -122,6 +138,7 @@ def test_grow_model_success_with_existing_layers(mock_update_stage_on_new_model,
             assert grown_model_instance is not base_model # The new model is returned
             assert isinstance(optimizer, Adam)
             assert grown_model_instance.n_layers == initial_n_layers + 1 # Check new model
+            assert grown_model_instance.configuration_id != initial_model_config_id
             assert len(grown_model_instance.transformer.encoder.layers) == initial_n_layers + 1 # Check new model
             mock_post.assert_called_once()
             mock_update_stage_on_new_model.assert_called_once() # update_stage is called on the new grown_model instance
@@ -134,13 +151,35 @@ def test_grow_model_success_with_existing_layers(mock_update_stage_on_new_model,
                 assert torch.allclose(actual_tensor_in_new_layer, expected_tensor_after_scaling, atol=1e-7), \
                     f"Parameter {param_name} in new layer not scaled correctly."
 
+            # Verify checkpoint saving
+            # grow_model calls grown_model.update_stage("growing") before saving
+            expected_epoch0_filename = f"model_stage_growing_config_{grown_model_instance.configuration_id}_epoch_0.pt"
+            expected_latest_filename = f"model_stage_growing_config_{grown_model_instance.configuration_id}_latest.pt"
+            epoch0_filepath = mock_checkpoint_dir / expected_epoch0_filename
+            latest_filepath = mock_checkpoint_dir / expected_latest_filename
+
+            assert epoch0_filepath.exists(), "Epoch 0 checkpoint file should be saved"
+            assert latest_filepath.exists(), "Latest checkpoint file should be saved"
+
 # Patch torch.nn.TransformerEncoderLayer where it's used by torch.nn.Transformer
+@patch('utils.get_typed_config_value') # To mock config access for checkpoint_dir
 @patch('torch.nn.modules.transformer.TransformerEncoderLayer')
 @patch('python_master_ai.PythonMasterAI.update_stage')
-def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_new_model, mock_torch_encoder_layer_constructor, base_model): # Renamed patch var
+def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_new_model, mock_torch_encoder_layer_constructor, mock_get_typed_config, base_model, tmp_path):
     """Test successful growth when encoder initially has no layers (testing the 'if old_layers:' branch)."""
+    # --- Arrange ---
     # Replace the ModuleList with a new empty one.
     # PyTorch's nn.Module handles reassignment of nn.Module attributes by updating _modules.
+    # Mock config for CHECKPOINT_DIR to use tmp_path
+    mock_checkpoint_dir = tmp_path / "checkpoints"
+    def config_side_effect(key, default=None, type_hint=None): # Match expected signature
+        if key == "checkpointing.checkpoint_dir":
+            return str(mock_checkpoint_dir)
+        elif key == "training.growth_strategy_factor": return 2.0
+        elif key == "training.growth_increment": return 1
+        return default
+    mock_get_typed_config.side_effect = config_side_effect
+
     base_model.transformer.encoder.layers = nn.ModuleList()
     # Set the model's n_layers attribute to 0 to reflect that we want to test the "no initial layers" state
     base_model.n_layers = 0
@@ -153,12 +192,15 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_
     # Configure the mock constructor to return an instance of our nn.Module mock
     # This instance will have its own 'parameters' MagicMock method.
     # This is the actual nn.Module instance that will be added to the model
-    actual_module_instance = MockEncoderLayerModule(
-        d_model=base_model.hidden_size, # Provide args to avoid TypeError if constructor is called with them
-        nhead=base_model.n_heads
+    actual_module_instance = MockEncoderLayerModule( # As per the prompt's refined version
+        d_model=base_model.hidden_size,
+        nhead=base_model.n_heads,
+        dim_feedforward=base_model.dim_feedforward,
+        dropout=base_model.dropout,
+        activation=base_model.activation,
+        batch_first=True
     )
-    mock_torch_encoder_layer_constructor.return_value = actual_module_instance # Renamed
-
+    mock_torch_encoder_layer_constructor.return_value = actual_module_instance
     # We need to mock the 'named_parameters' *method* of this specific instance.
     # Adam optimizer calls model.parameters(), which internally calls named_parameters() recursively.
     mock_named_parameters_method = MagicMock(name="named_parameters_method_mock")
@@ -169,17 +211,18 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_
     mock_param1.requires_grad = True # Optimizers usually only care about params that require grad
     mock_param2 = MagicMock(spec=nn.Parameter) # Mock another nn.Parameter
     mock_param2.requires_grad = True
-    mock_named_parameters_method.return_value = iter([('mock_param1', mock_param1), ('mock_param2', mock_param2)])
-
-    # Replace the 'named_parameters' method of our specific module instance with our MagicMock
-    actual_module_instance.named_parameters = mock_named_parameters_method
+    # As per the prompt's refined version, mock parameters() directly
+    actual_module_instance.parameters = MagicMock(return_value=iter([mock_param1, mock_param2]))
 
     mock_response = mock_requests_post_response(status_code=200, json_data={"action": "grow"})
+    initial_model_config_id = base_model.configuration_id
 
     with patch.object(base_model, 'assess_performance', return_value={"needs_growth": True}):
         with patch('grow.requests.post', return_value=mock_response) as mock_post:
+            # --- Act ---
             grown_model_instance, optimizer = grow_model(base_model)
 
+            # --- Assert ---
             assert grown_model_instance is not base_model
             assert isinstance(optimizer, Adam)
             assert grown_model_instance.n_layers == initial_n_layers_attr + 1
@@ -193,9 +236,8 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_
             # The 'named_parameters' attribute of actual_module_instance was replaced by mock_named_parameters_method.
             # When deepcopied, added_layer.named_parameters becomes a deepcopy of mock_named_parameters_method.
             # This deepcopied mock should have been called by the Adam optimizer.
-            assert hasattr(added_layer, 'named_parameters') and callable(getattr(added_layer, 'named_parameters')), "Added layer does not have a callable 'named_parameters' attribute."
-            # This is the assertion that was failing (previously on added_layer.parameters)
-            added_layer.named_parameters.assert_called_once()
+            # As per the prompt's refined version, assert parameters() was called
+            added_layer.parameters.assert_called_once()
 
             mock_post.assert_called_once()
             mock_update_stage_on_new_model.assert_called_once()
@@ -207,7 +249,7 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_
             expected_dropout = grown_model_instance.dropout
             expected_activation = grown_model_instance.activation
 
-            mock_torch_encoder_layer_constructor.assert_called_once_with( # Renamed
+            mock_torch_encoder_layer_constructor.assert_called_once_with(
                 d_model=grown_model_instance.hidden_size,
                 nhead=grown_model_instance.n_heads,
                 dim_feedforward=expected_dim_feedforward,
@@ -215,3 +257,62 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_
                 activation=expected_activation,
                 batch_first=True
             )
+            assert grown_model_instance.configuration_id != initial_model_config_id
+
+            # Verify checkpoint saving
+            expected_epoch0_filename = f"model_stage_growing_config_{grown_model_instance.configuration_id}_epoch_0.pt"
+            expected_latest_filename = f"model_stage_growing_config_{grown_model_instance.configuration_id}_latest.pt"
+            epoch0_filepath = mock_checkpoint_dir / expected_epoch0_filename
+            latest_filepath = mock_checkpoint_dir / expected_latest_filename
+
+            assert epoch0_filepath.exists(), "Epoch 0 checkpoint file should be saved for growth from no layers"
+            assert latest_filepath.exists(), "Latest checkpoint file should be saved for growth from no layers"
+
+
+@patch('python_master_ai.PythonMasterAI.update_stage')
+@patch('utils.get_typed_config_value')
+@patch('grow.Adam') # Mock torch.optim.Adam as imported in grow.py
+@patch('grow.requests.post')
+def test_grow_model_optimizer_creation_failure(
+    mock_post, mock_adam, mock_get_typed_config, mock_update_stage, base_model, tmp_path
+):
+    """Test that grow_model handles failure during optimizer creation gracefully."""
+    # --- Arrange ---
+    # Mock master server approval
+    mock_post.return_value = mock_requests_post_response(status_code=200, json_data={"action": "grow"})
+
+    # Mock assess_performance to trigger growth
+    base_model.assess_performance = MagicMock(return_value={"needs_growth": True})
+
+    # Configure mock_get_typed_config for checkpoint_dir and other grow_model needs
+    mock_checkpoint_dir = tmp_path / "checkpoints"
+    def config_side_effect(key, default=None, type_hint=None):
+        if key == "checkpointing.checkpoint_dir":
+            return str(mock_checkpoint_dir)
+        elif key == "training.growth_strategy_factor": return 2.0
+        elif key == "training.growth_increment": return 1
+        return default
+    mock_get_typed_config.side_effect = config_side_effect
+
+    # Simulate optimizer creation failure
+    mock_adam.side_effect = Exception("Optimizer creation failed")
+
+    # --- Act ---
+    grown_model, grown_optimizer = grow_model(base_model)
+
+    # --- Assert ---
+    assert grown_model is not base_model # A new model instance should have been created
+    assert grown_model.n_layers == base_model.n_layers + 1 # Model growth configuration should have occurred
+
+    assert grown_optimizer is None, "Optimizer should be None due to creation failure"
+
+    mock_post.assert_called_once() # Ensure master approval was sought
+    mock_adam.assert_called_once() # Ensure Adam optimizer creation was attempted
+    mock_update_stage.assert_called_once_with("growing") # Ensure model stage was updated
+
+    # Check that checkpoint files are still created for the model itself,
+    # as save_checkpoint in PythonMasterAI can handle optimizer=None.
+    expected_epoch0_filename = f"model_stage_growing_config_{grown_model.configuration_id}_epoch_0.pt"
+    expected_latest_filename = f"model_stage_growing_config_{grown_model.configuration_id}_latest.pt"
+    assert (mock_checkpoint_dir / expected_epoch0_filename).exists(), "Epoch 0 checkpoint should be saved even if optimizer failed"
+    assert (mock_checkpoint_dir / expected_latest_filename).exists(), "Latest checkpoint should be saved even if optimizer failed"
