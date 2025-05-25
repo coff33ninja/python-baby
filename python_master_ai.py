@@ -223,6 +223,10 @@ class PythonMasterAI(nn.Module):
         print(f"[DEBUG] Token indices: min={min_idx}, max={max_idx}, vocab_size={self.vocab_size}")
         assert (x >= 0).all() and (x < self.vocab_size).all(), (
             f"Token index out of range! min={min_idx}, max={max_idx}, vocab_size={self.vocab_size}")
+        # Robustly handle src_key_padding_mask type for transformer
+        if src_key_padding_mask is not None:
+            if src_key_padding_mask.dtype not in (torch.bool, torch.float32, torch.float64, torch.float16):
+                src_key_padding_mask = src_key_padding_mask.bool()
         embedded_src = self.embed(x)
         if self.n_layers > 0:
             transformer_output = self.transformer.encoder(embedded_src, src_key_padding_mask=src_key_padding_mask)
