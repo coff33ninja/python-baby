@@ -38,8 +38,21 @@ evaluation:
 
 # Scraper Configuration
 scraper:
-  # Default User-Agent string used by the scraper when making HTTP requests.
   default_user_agent: "PythonMasterAI/1.0 (Configurable Scraper)"
+  pypi_fetch:
+    retry_attempts: 3
+    timeout: 15 # seconds
+  scrapy: # Scrapy specific settings
+    retry_enabled: true
+    retry_times: 3      # Number of times to retry failed requests
+    # HTTP response codes to retry on.
+    retry_http_codes: [500, 502, 503, 504, 522, 524, 408, 429]
+    autothrottle_enabled: true
+    autothrottle_start_delay: 1.0 # Initial download delay (seconds)
+    autothrottle_max_delay: 10.0  # Max download delay under high load (seconds)
+    autothrottle_target_concurrency: 1.0 # Desired average number of parallel requests to each domain
+    download_delay: 0.5 # Base delay (seconds) between requests if AUTOTHROTTLE_ENABLED is False
+    concurrent_requests_per_domain: 8 # Max concurrent requests to any single domain
 
 # Logging Configuration
 logging:

@@ -7,7 +7,18 @@ import time
 import logging  # Standard logging
 from datetime import datetime
 import json
-from utils import get_config_value, setup_logging  # For config and logging setup
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    RetryError,
+    retry_if_exception_type,
+)  # For retries
+from utils import (
+    get_config_value,
+    setup_logging,
+    get_typed_config_value,
+)  # For config and logging setup
 
 # --- Initialize logger for this module ---
 logger = logging.getLogger(__name__)
@@ -118,10 +129,25 @@ class PythonSpider(scrapy.Spider):
             }
 
 
+@retry(
+    stop=stop_after_attempt(
+        get_typed_config_value("scraper.pypi_fetch.retry_attempts", 3, int)
+    ),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(
+        requests.exceptions.RequestException
+    ),  # Only retry on requests exceptions
+)
 def fetch_pypi_updates(package_name: str, version_data_dir: str):
+    """
+    Fetches package information from PyPI, including summary and description (README).
+    Retries on failure.
+    """
     try:
         url = f"https://pypi.org/pypi/{package_name}/json"
-        response = requests.get(url, timeout=10)
+        # Consider adding a specific user-agent for these requests too
+        pypi_timeout = get_typed_config_value("scraper.pypi_fetch.timeout", 15, int)
+        response = requests.get(url, timeout=pypi_timeout)
         response.raise_for_status()
         data = response.json()
         summary_content = data.get("info", {}).get("summary", "")
@@ -130,16 +156,37 @@ def fetch_pypi_updates(package_name: str, version_data_dir: str):
         os.makedirs(os.path.dirname(output_filepath), exist_ok=True)
         with open(output_filepath, "a", encoding="utf-8") as f:
             f.write(summary_content + "\n")
-        logger.info(f"Saved PyPI data for {package_name} to {output_filepath}")
-        return {
+        logger.info(f"Saved PyPI summary for {package_name} to {output_filepath}")
+
+        readme_content = data.get("info", {}).get("description", "")
+        readme_content_type = data.get("info", {}).get("description_content_type", "text/plain")
+        readme_filename_saved = None
+
+        if readme_content:
+            readme_filename_ext = ".md" if "markdown" in readme_content_type.lower() else \
+                                  ".rst" if "rst" in readme_content_type.lower() else ".txt"
+            readme_filename = f"pypi_package_{package_name}_README{readme_filename_ext}"
+            readme_filepath = os.path.join(version_data_dir, readme_filename)
+            try:
+                with open(readme_filepath, "w", encoding="utf-8") as f_readme:
+                    f_readme.write(readme_content)
+                logger.info(f"Saved PyPI README for {package_name} to {readme_filepath}")
+                readme_filename_saved = readme_filename
+            except Exception as e_readme:
+                logger.error(f"Error saving PyPI README for {package_name} to {readme_filepath}: {e_readme}", exc_info=True)
+
+        result_info = {
             "package_name": package_name,
             "version": data.get("info", {}).get("version", "N/A"),
-            "file_saved": output_filename,
+            "summary_file_saved": output_filename,
             "summary_content_preview": summary_content[:100],
+            "readme_file_saved": readme_filename_saved,
+            "readme_content_preview": readme_content[:100] if readme_content else None,
         }
-    except requests.RequestException as e:
+        return result_info
+    except (requests.RequestException, RetryError) as e: # Catch RetryError from tenacity
         logger.error(f"Error fetching PyPI data for {package_name}: {e}", exc_info=True)
-        return {"package_name": package_name, "file_saved": None, "error": str(e)}
+        return {"package_name": package_name, "summary_file_saved": None, "readme_file_saved": None, "error": str(e)}
 
 
 def scrape_data(stage, sources, source_urls):
@@ -171,6 +218,36 @@ def scrape_data(stage, sources, source_urls):
         "PLAYWRIGHT_LAUNCH_OPTIONS": {"headless": True, "timeout": 30 * 1000},
         "LOG_LEVEL": scrapy_log_level,  # Use config for Scrapy's internal log level
         "ITEM_PIPELINES": {"scrape_data.SaveToFilePipeline": 300},
+        "USER_AGENT": get_config_value(
+            "scraper.default_user_agent", "PythonMasterAI_Scraper/1.0"
+        ),
+        # Retry Middleware Settings
+        "RETRY_ENABLED": get_typed_config_value(
+            "scraper.scrapy.retry_enabled", True, bool
+        ),
+        "RETRY_TIMES": get_typed_config_value("scraper.scrapy.retry_times", 3, int),
+        "RETRY_HTTP_CODES": get_config_value(
+            "scraper.scrapy.retry_http_codes", [500, 502, 503, 504, 522, 524, 408, 429]
+        ),
+        # AutoThrottle Extension (Rate Limiting)
+        "AUTOTHROTTLE_ENABLED": get_typed_config_value(
+            "scraper.scrapy.autothrottle_enabled", True, bool
+        ),
+        "AUTOTHROTTLE_START_DELAY": get_typed_config_value(
+            "scraper.scrapy.autothrottle_start_delay", 1.0, float
+        ),
+        "AUTOTHROTTLE_MAX_DELAY": get_typed_config_value(
+            "scraper.scrapy.autothrottle_max_delay", 10.0, float
+        ),
+        "AUTOTHROTTLE_TARGET_CONCURRENCY": get_typed_config_value(
+            "scraper.scrapy.autothrottle_target_concurrency", 1.0, float
+        ),
+        "DOWNLOAD_DELAY": get_typed_config_value(
+            "scraper.scrapy.download_delay", 0.5, float
+        ),
+        "CONCURRENT_REQUESTS_PER_DOMAIN": get_typed_config_value(
+            "scraper.scrapy.concurrent_requests_per_domain", 8, int
+        ),
     }
     process = CrawlerProcess(settings=settings)
 
