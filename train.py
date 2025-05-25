@@ -8,7 +8,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 from scrape_data import scrape_data
 import pytest # type: ignore
-from typing import DefaultDict, Sized, TypeVar, Type, cast
+from typing import DefaultDict, Sized, cast
 import os
 import torch
 import json
