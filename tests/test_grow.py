@@ -153,22 +153,26 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_
     # Configure the mock constructor to return an instance of our nn.Module mock
     # This instance will have its own 'parameters' MagicMock method.
     # This is the actual nn.Module instance that will be added to the model
-    actual_module_instance = MockEncoderLayerModule() # Ensure you are using the correctly imported or defined mock class
+    actual_module_instance = MockEncoderLayerModule(
+        d_model=base_model.hidden_size, # Provide args to avoid TypeError if constructor is called with them
+        nhead=base_model.n_heads
+    )
     mock_torch_encoder_layer_constructor.return_value = actual_module_instance # Renamed
 
-    # We need to mock the 'parameters' *method* of this specific instance.
-    # Create a MagicMock that will replace the 'parameters' method.
-    mock_parameters_method = MagicMock(name="parameters_method_mock")
+    # We need to mock the 'named_parameters' *method* of this specific instance.
+    # Adam optimizer calls model.parameters(), which internally calls named_parameters() recursively.
+    mock_named_parameters_method = MagicMock(name="named_parameters_method_mock")
 
-    # Configure what this mocked 'parameters' method will return (an iterator of mock nn.Parameters)
+    # Configure what this mocked 'named_parameters' method will return
+    # (an iterator of (name, mock nn.Parameter) tuples)
     mock_param1 = MagicMock(spec=nn.Parameter) # Mock an nn.Parameter
-    mock_param1.numel.return_value = 10
+    mock_param1.requires_grad = True # Optimizers usually only care about params that require grad
     mock_param2 = MagicMock(spec=nn.Parameter) # Mock another nn.Parameter
-    mock_param2.numel.return_value = 20
-    mock_parameters_method.return_value = iter([mock_param1, mock_param2])
+    mock_param2.requires_grad = True
+    mock_named_parameters_method.return_value = iter([('mock_param1', mock_param1), ('mock_param2', mock_param2)])
 
-    # Replace the 'parameters' method of our specific module instance with our MagicMock
-    actual_module_instance.parameters = mock_parameters_method
+    # Replace the 'named_parameters' method of our specific module instance with our MagicMock
+    actual_module_instance.named_parameters = mock_named_parameters_method
 
     mock_response = mock_requests_post_response(status_code=200, json_data={"action": "grow"})
 
@@ -186,11 +190,12 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_
             assert isinstance(added_layer, MockEncoderLayerModule), \
             "Layer added is not of the expected mock type MockEncoderLayerModule."
                 
-            # The 'parameters' attribute of actual_module_instance was replaced by mock_parameters_method.
-            # When deepcopied, added_layer.parameters becomes a deepcopy of mock_parameters_method.
+            # The 'named_parameters' attribute of actual_module_instance was replaced by mock_named_parameters_method.
+            # When deepcopied, added_layer.named_parameters becomes a deepcopy of mock_named_parameters_method.
             # This deepcopied mock should have been called by the Adam optimizer.
-            assert hasattr(added_layer, 'parameters') and callable(getattr(added_layer, 'parameters')), "Added layer does not have a callable 'parameters' attribute."
-            added_layer.parameters.assert_called_once()
+            assert hasattr(added_layer, 'named_parameters') and callable(getattr(added_layer, 'named_parameters')), "Added layer does not have a callable 'named_parameters' attribute."
+            # This is the assertion that was failing (previously on added_layer.parameters)
+            added_layer.named_parameters.assert_called_once()
 
             mock_post.assert_called_once()
             mock_update_stage_on_new_model.assert_called_once()
@@ -210,6 +215,3 @@ def test_grow_model_success_initially_no_layers_in_encoder(mock_update_stage_on_
                 activation=expected_activation,
                 batch_first=True
             )
-            # The parameters method of the new layer (our mock) would be called by Adam optimizer,
-            # so it should be called.
-            mock_parameters_method.assert_called()

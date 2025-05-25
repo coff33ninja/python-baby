@@ -107,9 +107,11 @@ def _execute_restricted_code_target(
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
-        results["stdout"] = (  # Use printed() method from PrintCollector
-            _print_collector_instance.printed() + redirected_stdout_exec.getvalue()  # type: ignore[attr-defined]
-        )
+        # Directly access printed_text and clear it, similar to PrintCollector.printed()
+        collected_text_from_restricted_print = "".join(_print_collector_instance._printed_text) # Access internal attribute
+        _print_collector_instance._printed_text = [] # Clear the list after getting value
+        results["stdout"] = collected_text_from_restricted_print + redirected_stdout_exec.getvalue()
+
         err_val = redirected_stderr_exec.getvalue()
         if err_val:
             results["stderr"] = (
