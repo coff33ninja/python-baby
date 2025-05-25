@@ -239,6 +239,12 @@ def main():
         default=default_timeout_main,
         help=f"Timeout for code execution in seconds. Default: {default_timeout_main}",
     )
+    parser.add_argument(
+        "--stage",
+        type=str,
+        default=None, # Default to None, meaning evaluate all stages
+        help="Optional: Specific AI stage to filter tasks for (e.g., baby, toddler). Evaluates all if not set.",
+    )
 
     args = parser.parse_args()
     start_eval_time = time.time()
@@ -286,6 +292,16 @@ def main():
                 task_id = task_data.get("task_id", f"task_{line_num+1}")
                 task_type = task_data.get("task_type")
                 prompt = task_data.get("prompt")
+                task_stage = task_data.get("stage")
+
+                # Filter by stage if --stage argument is provided
+                if args.stage and task_stage != args.stage:
+                    logger.debug(
+                        f"  Skipping task {task_id} (stage: {task_stage}) as it does not match requested stage: {args.stage}"
+                    )
+                    all_results.append({"task_id": task_id, "status": "skipped_stage_filter", "stage": task_stage, "requested_stage": args.stage})
+                    continue
+
 
                 raw_val_context_code = task_data.get("reference_code")
                 eval_context_code: Optional[str] = None
@@ -416,6 +432,8 @@ def main():
         "model_stage_loaded": model_stage_loaded,
         "evaluation_dataset": args.eval_dataset_path,
         "total_tasks_processed": len(all_results),
+        "requested_stage_filter": args.stage if args.stage else "all",
+
     }
     if code_gen_results_summary["total"] > 0:
         pass_rate = (
