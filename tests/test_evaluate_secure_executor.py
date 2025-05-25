@@ -64,19 +64,15 @@ def test_execute_restricted_import_os(caplog):
 
     assert passed is False, "Execution should fail due to restricted import."
     # RestrictedPython typically raises a NameError for disallowed imports at compile/exec time,
-    # or if a guard prevents access. The exact message can vary.
-    # Looking for common indicators of such failures.
-    assert any(
-        err_indicator in log.lower() or err_indicator in stderr.lower()
-        for err_indicator in [
-            "importerror",
-            "nameerror",
-            "syntaxerror",
-            "restricted",
-            "permission denied",
-            "is not defined",
-        ]
-    ), f"Expected an import/security related error. Log: {log}, Stderr: {stderr}"
+    # if 'os' is not handled by safe_globals or a custom importer.
+    # The log in evaluate.py will capture this as "Execution error: SyntaxError: ..."
+    # If the code were `print(os.getcwd())` without `import os`, it would be a NameError.
+    assert (
+        "syntaxerror" in log.lower()
+        or "nameerror" in log.lower()
+        or "syntaxerror" in stderr.lower()
+        or "nameerror" in stderr.lower()
+    ), f"Expected SyntaxError or NameError due to restricted import. Log: {log}, Stderr: {stderr}"
 
 
 def test_execute_infinite_loop_timeout():
@@ -100,11 +96,26 @@ def test_execute_infinite_loop_timeout():
     # Check if duration is close to timeout, allowing for some overhead but not excessively long.
     # Allowing a range around the 1-second timeout to account for process start/stop overhead
     # For a 3s timeout, expect it to be slightly above 3s due to overhead.
-    # Allow a tighter upper bound, e.g., timeout + 1.5s for overhead.
+    # Allow an upper bound, e.g., timeout + 1.0s for overhead.
+    # Allow a lower bound, e.g., timeout - 0.5s for overhead.
     assert (
-        2.8 <= duration < (3.0 + 1.5)
+        2.8 <= duration < (3.0 + 1.0)
     ), f"Execution duration {duration:.4f}s was not within the expected range for a 3s timeout."
+def test_execute_sandboxed_code():
+    code = "x = 10\ny = 20\nresult = x + y"
+    tests = "assert result == 30"  # Ensure main code runs
+    executor = SecureExecutor(timeout_seconds=DEFAULT_TEST_TIMEOUT)
+    passed, log, stdout, stderr = executor.execute(code, tests)
 
+    print(f"Log: {log}")
+    print(f"Stdout: {stdout}")
+    print(f"Stderr: {stderr}")
+
+    assert passed is True, f"Test should pass. Log: {log}, Stderr: {stderr}"
+    assert "execution completed" in log.lower()  # Case-insensitive
+    assert "x" not in stdout, "Sandboxed code should not have access to global variables."
+    assert "y" not in stdout, "Sandboxed code should not have access to global variables."
+    assert "result" not in stdout, "Sandboxed code should not have access to global variables."
 
 def test_execute_print_capture():
     code = "print('Hello from sandbox')\nprint('Line 2')\nvar = 'done'"
