@@ -1,34 +1,45 @@
 # config.yaml
+# Central configuration file for PythonMasterAI.
+# Settings here control model architecture, training parameters, evaluation,
+# scraping behavior, logging, and GUI elements.
 
 # Default PythonMasterAI Model Architecture
 model_defaults:
-  vocab_size: 16000
-  n_layers: 2
-  n_heads: 4
-  hidden_size: 256
-  dropout: 0.1
-  dim_feedforward_factor: 4 # Multiplied by hidden_size for dim_feedforward
-  activation: relu
+  vocab_size: 16000         # Size of the vocabulary used by the tokenizer and model.
+  n_layers: 2               # Number of transformer encoder layers.
+  n_heads: 4                # Number of attention heads in each transformer layer.
+  hidden_size: 256          # Dimensionality of the model's hidden states (embedding size).
+  dropout: 0.1              # Dropout rate used in various parts of the model.
+  dim_feedforward_factor: 4 # Factor to multiply hidden_size by to get the feedforward network's inner dimension.
+  activation: "relu"        # Activation function used in the feedforward networks (e.g., "relu", "gelu").
 
 # Training Defaults
 training_defaults:
-  learning_rate: 0.0001
-  batch_size: 4 # Default batch size for DataLoader in train.py
-  num_epochs: 5 # Default number of epochs for a training run in train.py
+  learning_rate: 0.0001     # Initial learning rate for the optimizer.
+  batch_size: 4             # Number of samples processed before the model's parameters are updated.
+  num_epochs: 5             # Number of times the entire training dataset is passed through the model.
+  gradient_clipping_norm: 1.0 # Maximum norm for gradient clipping to prevent exploding gradients. Set to 0 to disable.
+  lr_scheduler:               # Configuration for the learning rate scheduler.
+    step_size: 1            # Number of epochs after which the learning rate is decayed.
+    gamma: 0.7              # Multiplicative factor of learning rate decay (e.g., new_lr = old_lr * gamma).
 
 # Checkpointing Configuration
 checkpointing:
-  checkpoint_dir: checkpoints
+  checkpoint_dir: "checkpoints" # Directory where model checkpoints are saved during training.
 
 # Evaluation Configuration
 evaluation:
-  default_eval_dataset: sample_evaluation_dataset.jsonl # Used by evaluate.py if no dataset is specified
-  results_dir: eval_results # Used by evaluate.py
-  secure_exec_timeout: 10 # Seconds for code execution timeout in evaluate.py
+  # Default dataset file used by evaluate.py if no specific dataset is provided via command line.
+  default_eval_dataset: "sample_evaluation_dataset.jsonl"
+  # Directory where evaluation results (e.g., reports, metrics) are saved.
+  results_dir: "eval_results"
+  # Timeout in seconds for executing generated code snippets securely during evaluation.
+  secure_exec_timeout: 10
 
 # Scraper Configuration
 scraper:
-  default_user_agent: PythonMasterAI/1.0 (Configurable Scraper)
+  # Default User-Agent string used by the scraper when making HTTP requests.
+  default_user_agent: "PythonMasterAI/1.0 (Configurable Scraper)"
 
 # Logging Configuration
 logging:
@@ -36,9 +47,11 @@ logging:
   console_level: INFO    # Logging level for console output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   file_level: DEBUG       # Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   tensorboard_log_dir: runs/python_master_ai_experiment # For TensorBoard logging
+  max_in_memory_log_entries: 1000 # Max number of entries for in-memory logs (performance, research, source) in PythonMasterAI
 
 # In your config.yaml
 gui_settings:
   file_preview:
-    max_bytes: 1048576  # Example: 1MB
-    max_lines: 200      # Example: 200 lines
+    max_bytes: 1048576  # Maximum bytes to read from a file for preview in the GUI (e.g., 1MB).
+    max_lines: 200      # Maximum lines to display from a file for preview in the GUI.
+  script_execution_timeout: 3600 # Timeout in seconds for scripts (train.py, scrape_data.py) run from the GUI. Default: 1 hour.
