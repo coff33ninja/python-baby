@@ -5,3 +5,9 @@
 /data
 *.log
 /checkpoints
+/runs/python_master_ai_experiment
+source_log.json
+performance_log.json
+.coverage
+source_log.json
+source_log.json
