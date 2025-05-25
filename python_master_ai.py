@@ -36,7 +36,6 @@ class PythonMasterAI(nn.Module):
         super().__init__()
 
         # Load defaults from config, allowing overrides from constructor arguments
-        config_vocab_size = get_typed_config_value('model_defaults.vocab_size', 16000, int)
         config_n_layers = get_typed_config_value('model_defaults.n_layers', 2, int)
         config_n_heads = get_typed_config_value('model_defaults.n_heads', 4, int)
         config_hidden_size = get_typed_config_value('model_defaults.hidden_size', 256, int)
@@ -46,7 +45,12 @@ class PythonMasterAI(nn.Module):
         self.max_log_entries = get_typed_config_value('logging.max_in_memory_log_entries', 1000, int)
 
         # Assign attributes, ensuring correct types
-        self.vocab_size: int = int(vocab_size) if vocab_size is not None else config_vocab_size
+        self.tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            logger.info("Tokenizer pad_token set to eos_token.")
+        # Always use tokenizer's vocab size for model
+        self.vocab_size: int = self.tokenizer.vocab_size
         self.n_layers: int = int(n_layers) if n_layers is not None else config_n_layers
         self.n_heads: int = int(n_heads) if n_heads is not None else config_n_heads
         self.hidden_size: int = int(hidden_size) if hidden_size is not None else config_hidden_size
@@ -63,7 +67,6 @@ class PythonMasterAI(nn.Module):
             self.dim_feedforward: int = self.hidden_size * _ff_factor
         self.recalculate_configuration_id()
         logger.info(f"Initialized Model Configuration ID: {self.configuration_id}")
-
         self.embed = nn.Embedding(self.vocab_size, self.hidden_size)
         self.transformer = nn.Transformer(
             d_model=self.hidden_size,
@@ -83,7 +86,6 @@ class PythonMasterAI(nn.Module):
         self.stage = "baby"
         self.growth_tasks = self.define_growth_tasks() # Defines unit_test_accuracy as float
         self.task_progress = defaultdict(float) # Changed from int to float
-        self.tokenizer = AutoTokenizer.from_pretrained("gpt2")
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             logger.info("Tokenizer pad_token set to eos_token.")
@@ -215,6 +217,12 @@ class PythonMasterAI(nn.Module):
         logger.info(f"Recalculated Configuration ID: {self.configuration_id}")
 
     def forward(self, x, src_key_padding_mask=None):
+        # Debug: Print min/max token indices and vocab size before embedding
+        min_idx = x.min().item() if hasattr(x, 'min') else 'N/A'
+        max_idx = x.max().item() if hasattr(x, 'max') else 'N/A'
+        print(f"[DEBUG] Token indices: min={min_idx}, max={max_idx}, vocab_size={self.vocab_size}")
+        assert (x >= 0).all() and (x < self.vocab_size).all(), (
+            f"Token index out of range! min={min_idx}, max={max_idx}, vocab_size={self.vocab_size}")
         embedded_src = self.embed(x)
         if self.n_layers > 0:
             transformer_output = self.transformer.encoder(embedded_src, src_key_padding_mask=src_key_padding_mask)

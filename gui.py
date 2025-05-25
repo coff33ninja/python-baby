@@ -568,6 +568,21 @@ def run_train_script_gui(stage, user_key, session_key_state):
     result = run_script_in_background(
         command, user_key, session_key_state, f"Training Script (train.py) [version {latest_version} after research]"
     )
+    # Enhanced error handling for PyTorch embedding index error
+    if "index out of range in self" in result.lower():
+        logger.error("Training failed due to a data/model mismatch: PyTorch embedding index out of range. This is likely a tokenization or vocabulary bug, not a knowledge gap.")
+        return (
+            "Training failed due to a data/model mismatch: PyTorch embedding index out of range.\n"
+            "This is likely caused by out-of-vocabulary tokens or a bug in your preprocessing/tokenization pipeline.\n"
+            "Please check your dataset, tokenization, and model vocabulary size.\n\n"
+            "Recommended debug steps:\n"
+            "1. Check your embedding layer's vocab size in python_master_ai.py.\n"
+            "2. Print the max/min token indices in your dataset just before model training.\n"
+            "3. Ensure your tokenizer maps all unknown tokens to a valid <unk> index within the vocab.\n"
+            "4. Add an assertion in your data loader: assert (x >= 0).all() and (x < vocab_size).all()\n"
+            "5. If using a pre-trained tokenizer, ensure your data is compatible with its vocab.\n\n"
+            + result
+        )
     if any(s in result.lower() for s in ["cannot proceed", "error", "knowledge gap", "no dataset version"]):
         logger.error("Training still failed after research and retry. Human intervention may be required.")
         return (
