@@ -20,6 +20,7 @@ import logging
 # --- Initialize logger for this module ---
 logger = logging.getLogger(__name__)
 
+API_CONFIG_FILE_PATH = "api_config.json"
 # --- Helper function for typed config values (local to this module) ---
 _T_HELPER = TypeVar('_T_HELPER', float, int, str)
 
@@ -58,6 +59,7 @@ class PythonMasterAI(nn.Module):
         config_dropout = _get_typed_config_value_local('model_defaults.dropout', 0.1, float)
         config_activation = _get_typed_config_value_local('model_defaults.activation', "relu", str)
         config_ff_factor = _get_typed_config_value_local('model_defaults.dim_feedforward_factor', 4, int)
+        self.max_log_entries = _get_typed_config_value_local('logging.max_in_memory_log_entries', 1000, int)
 
         # Assign attributes, ensuring correct types
         self.vocab_size: int = int(vocab_size) if vocab_size is not None else config_vocab_size
@@ -105,6 +107,8 @@ class PythonMasterAI(nn.Module):
         self.knowledge_gaps = []
         self.known_sources = self.load_known_sources()
         self.current_dataset_version = None
+        self.api_config = None # For external API configurations
+        self._load_api_config() # Load external API configurations
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -128,7 +132,7 @@ class PythonMasterAI(nn.Module):
                         logger.warning(f"  Shape mismatch for layer: {name}. Previous: {param_prev.shape}, New: {current_new_model_state_dict_on_cpu[name].shape}. Skipped for direct load.")
                         mismatched_count += 1
                 else:
-                    skipped_non_exist +=1
+                    skipped_non_exist += 1 # Corrected: Increment if key from old_dict is not in new_dict
             
             if state_dict_to_load_for_matching_layers:
                 self.load_state_dict(state_dict_to_load_for_matching_layers, strict=False)
@@ -193,6 +197,25 @@ class PythonMasterAI(nn.Module):
 
         self.to(self.device)
         self._try_load_latest_checkpoint()
+
+    def _load_api_config(self):
+        """Loads API configurations from api_config.json."""
+        if os.path.exists(API_CONFIG_FILE_PATH):
+            try:
+                with open(API_CONFIG_FILE_PATH, "r") as f:
+                    self.api_config = json.load(f)
+                logger.info(f"Successfully loaded API configuration from {API_CONFIG_FILE_PATH}.")
+            except json.JSONDecodeError as e:
+                logger.error(f"Error decoding JSON from {API_CONFIG_FILE_PATH}: {e}. API features might be limited.")
+                self.api_config = {}
+            except Exception as e:
+                logger.error(f"Error reading API config file {API_CONFIG_FILE_PATH}: {e}. API features might be limited.")
+                self.api_config = {}
+        else:
+            logger.warning(
+                f"API configuration file {API_CONFIG_FILE_PATH} not found. Real-time source discovery will be limited to hardcoded sources."
+            )
+            self.api_config = {}
     def recalculate_configuration_id(self):
         config_params_str = (
             f"v{self.vocab_size}_l{self.n_layers}_h{self.n_heads}_"
@@ -288,24 +311,36 @@ class PythonMasterAI(nn.Module):
 
     def log_performance(self, metric, value):
         self.performance_log.append((metric, value))
+        # Note: The performance_log.json file is appended to and can grow large.
+        # Consider external log rotation or management for disk usage if it becomes an issue.
         with open("performance_log.json", "a") as f:
             json.dump({"metric": metric, "value": value}, f)
             f.write("\n")
+        if len(self.performance_log) > self.max_log_entries:
+            self.performance_log = self.performance_log[-self.max_log_entries:]
 
     def log_research(self, topic, sources, success, note=""):
         log_entry = {"topic": topic, "sources": sources, "success": success}
         if note:
             log_entry["note"] = note
         self.research_log.append(log_entry)
+        # Note: The research_log.json file is appended to and can grow large.
+        # Consider external log rotation or management for disk usage if it becomes an issue.
         with open("research_log.json", "a") as f:
             json.dump(log_entry, f)
             f.write("\n")
+        if len(self.research_log) > self.max_log_entries:
+            self.research_log = self.research_log[-self.max_log_entries:]
 
     def log_source(self, source, url, score, added):
         self.source_log.append({"source": source, "url": url, "score": score, "added": added})
+        # Note: The source_log.json file is appended to and can grow large.
+        # Consider external log rotation or management for disk usage if it becomes an issue.
         with open("source_log.json", "a") as f:
             json.dump({"source": source, "url": url, "score": score, "added": added}, f)
             f.write("\n")
+        if len(self.source_log) > self.max_log_entries:
+            self.source_log = self.source_log[-self.max_log_entries:]
 
     def load_known_sources(self):
         return {
@@ -322,7 +357,8 @@ class PythonMasterAI(nn.Module):
         }
 
     def assess_performance(self):
-        avg_loss = sum(v for k, v in self.performance_log if k == "loss") / max(1, len(self.performance_log))
+        loss_values = [v for k, v in self.performance_log if k == "loss"]
+        avg_loss = sum(loss_values) / max(1, len(loss_values))
         task_completion = {task: self.task_progress[task] for task in self.growth_tasks[self.stage]}
         accuracy = self.task_progress.get("unit_test_accuracy", 0)
         research_needed = len(self.knowledge_gaps) > 0 or accuracy < self.growth_tasks[self.stage]["unit_test_accuracy"]
@@ -547,15 +583,151 @@ class PythonMasterAI(nn.Module):
         return new_sources
 
     def search_for_sources(self, query):
+        """
+        Searches for new information sources based on a query using configured APIs.
+        """
         candidates = []
-        if self.stage == "baby":
-            candidates.append(("python_blog", "https://python-blog.example.com"))
-        elif self.stage == "toddler":
-            candidates.append(("python_tutorials", "https://tutorials.python.org"))
-        elif self.stage == "teenager":
-            candidates.append(("python_forum", "https://forum.python.org"))
+        logger.info(f"Searching for sources with query: '{query}'")
+
+        if not self.api_config or not isinstance(self.api_config, dict):
+            logger.warning("API config not loaded or invalid. Falling back to basic hardcoded source suggestions.")
+            # Fallback to very basic suggestions if API config is missing
+            if "python" in query.lower():
+                candidates.append(("python_docs_official", "https://docs.python.org/3/"))
+                candidates.append(("pypi_org", "https://pypi.org/"))
+            return candidates
+
+        api_keys = self.api_config.get("api_keys", {})
+        api_endpoints = self.api_config.get("api_endpoints", {})
+        search_params_config = self.api_config.get("search_parameters", {})
+
+        # --- GitHub Repository Search ---
+        github_pat = api_keys.get("github_pat")
+        github_repo_search_url = api_endpoints.get("github_search_repositories")
+        github_repo_query_params = search_params_config.get("github_repo_default_query_params", "")
+
+        if github_pat and github_pat != "YOUR_GITHUB_PERSONAL_ACCESS_TOKEN_HERE" and github_repo_search_url:
+            headers = {"Authorization": f"token {github_pat}"}
+            
+            query_lower = query.lower()
+            # Heuristically extract primary keywords from the AI's formulated query.
+            # Assumes query structure like "{topic} {task_type_suffix} {stage_keyword}"
+            # e.g., "classes basics python documentation" or "decorators advanced example"
+            core_query_parts = query.split()[:2] # e.g., ["classes", "basics"] or ["decorators", "advanced"]
+            
+            repo_search_terms = list(core_query_parts) # Start with core topic/task
+
+            if "documentation" in query_lower:
+                repo_search_terms.append("documentation")
+            elif "tutorial" in query_lower:
+                repo_search_terms.append("tutorial")
+            elif "example" in query_lower and "advanced" not in query_lower : # "advanced example" might be better for code search
+                repo_search_terms.append("example")
+            
+            # Ensure "python" is in search terms for relevance
+            if "python" not in [term.lower() for term in repo_search_terms]:
+                repo_search_terms.insert(0, "python")
+
+            search_query_github_repos = " ".join(repo_search_terms)
+            
+            full_github_repo_url = f"{github_repo_search_url}?q={search_query_github_repos} language:python&{github_repo_query_params}"
+            logger.info(f"Attempting GitHub repository search with query: '{search_query_github_repos} language:python'")
+            try:
+                response = requests.get(full_github_repo_url, headers=headers, timeout=10)
+                response.raise_for_status()
+                gh_results = response.json()
+                for item in gh_results.get("items", []):
+                    repo_name = item.get("full_name")
+                    repo_url = item.get("html_url")
+                    if repo_name and repo_url:
+                        candidates.append((f"github_repo_{repo_name.replace('/', '_')}", repo_url))
+                        logger.debug(f"  Added GitHub candidate: {repo_name} - {repo_url}")
+            except requests.RequestException as e:
+                logger.error(f"GitHub API search failed for query '{query}': {e}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse GitHub API response for query '{query}': {e}")
         else:
-            candidates.append(("python_conference", "https://pycon.org"))
+            logger.warning("GitHub PAT or search URL not configured. Skipping GitHub search.")
+
+        # --- GitHub Code Search ---
+        github_code_search_url = api_endpoints.get("github_search_code")
+        github_code_query_params = search_params_config.get("github_code_default_query_params", "")
+
+        if github_pat and github_pat != "YOUR_GITHUB_PERSONAL_ACCESS_TOKEN_HERE" and github_code_search_url:
+            headers = {"Authorization": f"token {github_pat}"}
+            query_lower_for_code = query.lower()
+            code_search_terms = []
+
+            # Determine if code search is appropriate and form terms
+            if "example" in query_lower_for_code or "implement" in query_lower_for_code or \
+               any(kw in query_lower_for_code for kw in ["function", "class", "method", "algorithm"]):
+                
+                core_code_topic = query.split()[:2] # e.g., ["decorators", "advanced"] or ["add", "functions"]
+                code_search_terms.extend(core_code_topic)
+                if "example" not in [t.lower() for t in code_search_terms]: # Add example if not implied
+                    code_search_terms.append("example")
+
+            if code_search_terms:
+                if "python" not in [term.lower() for term in code_search_terms]:
+                    code_search_terms.insert(0, "python")
+                
+                search_query_github_code = " ".join(code_search_terms)
+                # `in:file` searches within file content. `language:python` is crucial.
+                full_github_code_url = f"{github_code_search_url}?q={search_query_github_code} language:python in:file&{github_code_query_params}"
+                logger.info(f"Attempting GitHub code search with query: '{search_query_github_code} language:python in:file'")
+                try:
+                    response = requests.get(full_github_code_url, headers=headers, timeout=10)
+                    response.raise_for_status()
+                    gh_code_results = response.json()
+                    for item in gh_code_results.get("items", []):
+                        repo_info = item.get("repository", {})
+                        repo_name = repo_info.get("full_name")
+                        file_path_in_repo = item.get("path")
+                        file_html_url = item.get("html_url")
+                        if repo_name and file_path_in_repo and file_html_url:
+                            # Sanitize file_path_in_repo for use in source_name
+                            safe_file_path = file_path_in_repo.replace('/', '_').replace('.', '_')
+                            source_name = f"github_code_{repo_name.replace('/', '_')}_{safe_file_path}"
+                            candidates.append((source_name, file_html_url))
+                            logger.debug(f"  Added GitHub Code candidate: {source_name} - {file_html_url}")
+                except requests.RequestException as e:
+                    logger.error(f"GitHub code search failed for query '{query}': {e}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse GitHub code search response for query '{query}': {e}")
+            else:
+                logger.info(f"Skipping GitHub code search for query '{query}' as it doesn't strongly imply code examples.")
+        else:
+            logger.warning("GitHub PAT or code search URL not configured. Skipping GitHub code search.")
+
+        # --- Google Custom Search ---
+        google_api_key = api_keys.get("google_custom_search_api_key")
+        google_cx_id = api_keys.get("google_custom_search_cx_id")
+        google_search_url = api_endpoints.get("google_custom_search")
+        google_num_results = search_params_config.get("google_search_default_num_results", "5")
+
+        if google_api_key and google_api_key != "YOUR_GOOGLE_CSE_API_KEY_HERE" and \
+           google_cx_id and google_cx_id != "YOUR_GOOGLE_CSE_CX_ID_HERE" and google_search_url:
+            # Example: Google Custom Search for the query
+            full_google_url = f"{google_search_url}?key={google_api_key}&cx={google_cx_id}&q={query}&num={google_num_results}"
+            logger.info(f"Attempting Google Custom Search: {full_google_url}")
+            try:
+                response = requests.get(full_google_url, timeout=10)
+                response.raise_for_status()
+                google_results = response.json()
+                for item in google_results.get("items", []):
+                    title = item.get("title")
+                    link = item.get("link")
+                    if title and link:
+                        candidates.append((f"web_{urlparse(link).netloc}_{title[:20].replace(' ', '_')}", link))
+                        logger.debug(f"  Added Google Search candidate: {title} - {link}")
+            except requests.RequestException as e:
+                logger.error(f"Google Custom Search API failed for query '{query}': {e}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse Google Custom Search API response for query '{query}': {e}")
+        else:
+            logger.warning("Google Custom Search API Key, CX ID, or URL not configured. Skipping Google search.")
+
+        logger.info(f"Found {len(candidates)} potential new sources for query '{query}'.")
         return candidates
 
     def evaluate_source(self, source_name, url, query):

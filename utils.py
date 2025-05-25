@@ -5,7 +5,7 @@ import logging  # Added for logging
 import logging.handlers  # Added for logging
 
 CONFIG_FILE_PATH = "config.yaml"
-_config_cache = None
+_config_cache: dict | None = None
 # Initialize logger at module level for use in load_config
 logger = logging.getLogger(__name__)
 
@@ -14,30 +14,58 @@ logger = logging.getLogger(__name__)
 def load_config():
     global _config_cache
     if _config_cache is None:
-        if os.path.exists(CONFIG_FILE_PATH):
+        # Allow CONFIG_FILE_PATH to be overridden by an environment variable
+        actual_config_path = os.getenv('PYTHON_MASTER_AI_CONFIG_PATH', CONFIG_FILE_PATH)
+        logger.info(f"Attempting to load configuration from: {actual_config_path}")
+
+        if os.path.exists(actual_config_path):
             try:
-                with open(CONFIG_FILE_PATH, "r") as f:
+                with open(actual_config_path, "r") as f:
                     _config_cache = yaml.safe_load(f)
                     if _config_cache is None:
                         _config_cache = {} # Ensure it's a dict even if empty
                         logger.warning( # Changed from print
-                            f"Warning: Configuration file {CONFIG_FILE_PATH} is empty. Using defaults where applicable."
+                            f"Configuration file {actual_config_path} is empty. Using defaults where applicable."
                         )
-                    # else:
-                    # print(f"Loaded configuration from {CONFIG_FILE_PATH}") # This will be logged by setup_logging
+                    else:
+                        logger.info(f"Successfully loaded configuration from {actual_config_path}.")
+                        # Optionally, validate the loaded configuration
+                        # validate_config_schema(_config_cache)
             except yaml.YAMLError as e:
                 logger.error( # Changed from print
-                    f"Error parsing YAML configuration file {CONFIG_FILE_PATH}: {e}. Using defaults where applicable."
+                    f"Error parsing YAML configuration file {actual_config_path}: {e}. Using defaults where applicable."
                 )
                 _config_cache = {}
         else:
             logger.warning( # Changed from print
-                f"Warning: Configuration file {CONFIG_FILE_PATH} not found. Using defaults where applicable."
+                f"Configuration file {actual_config_path} not found. Using defaults where applicable."
             )
             _config_cache = {}
     return _config_cache
 
 def get_config_value(key_path: str, default=None):
+    # 1. Check environment variables first
+    # Convert dot.separated.path to UPPER_SNAKE_CASE for env var lookup
+    env_var_name = key_path.upper().replace('.', '_')
+    env_value = os.getenv(env_var_name)
+
+    if env_value is not None:
+        # Attempt to infer type for common cases (bool, int, float)
+        if env_value.lower() in ['true', 'false']:
+            logger.debug(f"Using environment variable override for '{key_path}' (as bool): {env_value.lower() == 'true'}")
+            return env_value.lower() == 'true'
+        try:
+            logger.debug(f"Using environment variable override for '{key_path}' (as int): {int(env_value)}")
+            return int(env_value)
+        except ValueError:
+            try:
+                logger.debug(f"Using environment variable override for '{key_path}' (as float): {float(env_value)}")
+                return float(env_value)
+            except ValueError:
+                logger.debug(f"Using environment variable override for '{key_path}' (as string): '{env_value}'")
+                return env_value # Return as string if not bool, int, or float
+
+    # 2. If no env var, check the YAML config
     config = load_config()
     keys = key_path.split(".")
     val = config
@@ -52,6 +80,20 @@ def get_config_value(key_path: str, default=None):
 _logging_configured = False
 
 
+def validate_config_schema(config_data: dict):
+    """
+    Placeholder for validating the structure and types of the loaded configuration.
+    This can be expanded with a schema validation library like jsonschema or Pydantic.
+    """
+    required_top_level_keys = ["model_defaults", "training_defaults", "logging", "evaluation", "scraper", "gui_settings"]
+    for key in required_top_level_keys:
+        if key not in config_data:
+            logger.warning(f"Configuration validation: Missing expected top-level key '{key}'.")
+
+    if "logging" in config_data and not isinstance(config_data["logging"], dict):
+        logger.warning("Configuration validation: 'logging' section should be a dictionary.")
+    # Add more specific checks as needed
+
 def setup_logging():
     global _logging_configured
     if _logging_configured:
@@ -60,7 +102,7 @@ def setup_logging():
     # Load logging configuration and ensure correct types
     log_file_config = get_config_value("logging.log_file", "project_ai.log")
     if not isinstance(log_file_config, str):
-        logger.warning(
+        print( # Use print here as logger might not be fully set up for this specific warning path
             f"Configuration 'logging.log_file' has unexpected type {type(log_file_config)}. Using default 'project_ai.log'."
         )
         log_file = "project_ai.log"
@@ -69,7 +111,7 @@ def setup_logging():
 
     log_level_console_config = get_config_value("logging.console_level", "INFO")
     if not isinstance(log_level_console_config, str):
-        logger.warning(
+        print(
             f"Configuration 'logging.console_level' has unexpected type {type(log_level_console_config)}. Using default 'INFO'."
         )
         log_level_console_str = "INFO"
@@ -78,7 +120,7 @@ def setup_logging():
 
     log_level_file_config = get_config_value("logging.file_level", "DEBUG")
     if not isinstance(log_level_file_config, str):
-        logger.warning(
+        print(
             f"Configuration 'logging.file_level' has unexpected type {type(log_level_file_config)}. Using default 'DEBUG'."
         )
         log_level_file_str = "DEBUG"

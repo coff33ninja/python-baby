@@ -1,0 +1,17 @@
+{
+  "api_keys": {
+    "google_custom_search_api_key": "YOUR_GOOGLE_CSE_API_KEY_HERE",
+    "google_custom_search_cx_id": "YOUR_GOOGLE_CSE_CX_ID_HERE",
+    "github_pat": "YOUR_GITHUB_PERSONAL_ACCESS_TOKEN_HERE"
+  },
+  "api_endpoints": {
+    "google_custom_search": "https://www.googleapis.com/customsearch/v1",
+    "github_search_repositories": "https://api.github.com/search/repositories",
+    "github_search_code": "https://api.github.com/search/code"
+  },
+  "search_parameters": {
+    "github_repo_default_query_params": "sort=stars&order=desc&per_page=5",
+    "github_code_default_query_params": "sort=indexed&order=desc&per_page=5",
+    "google_search_default_num_results": "5"
+  }
+}
