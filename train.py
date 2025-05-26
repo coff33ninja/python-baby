@@ -243,7 +243,7 @@ def train(stage: str):
                     f"Training/Batch_Loss_Stage_{stage}", loss_item, total_steps
                 )
 
-            code = model.generate_code("write function")
+            code = model.generate_for_evaluation("write function", task_type="code_generation")
             if run_unit_tests(code):
                 model.log_task_progress("unit_test_accuracy", success=True)
 

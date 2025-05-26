@@ -121,3 +121,32 @@ See `sample_evaluation_dataset.jsonl` for task examples. Evaluation results, inc
 *   **Generation Quality:** Initial generation is basic. Requires significant training and larger model sizes.
 *   **Compute Resources:** CPU is feasible for early stages, but GPU will be necessary for larger models and extensive training.
 *   **Security:** Master key provides basic protection. `RestrictedPython` in `evaluate.py` offers some safety for code execution, but true sandboxing for arbitrary code is complex.
+
+## ⚠️ Work-in-Progress Notice
+
+**PythonMasterAI is an experimental, self-evolving AI project.**
+- The codebase, model architecture, and training/evaluation scripts are under active development.
+- Features, APIs, and behaviors may change frequently as the AI grows and new capabilities are added.
+- Expect bugs, incomplete features, and evolving best practices.
+
+## Code Generation & Evaluation Usage
+
+**Deprecated:** `generate_code()`
+- The method `generate_code()` is now deprecated and has been removed from the codebase.
+- For all code generation and evaluation tasks, use:
+
+```python
+model.generate_for_evaluation(prompt_text, task_type="code_generation")
+```
+- For explanations or other tasks, set `task_type` accordingly (e.g., `"concept_explanation"`).
+- See `python_master_ai.py` for the latest method signatures and options.
+
+## Current Limitations & Growth
+- The model is currently at the "baby" stage: it can generate simple Python code and explanations, but output quality is basic.
+- Tokenization and mask handling are robust to common errors, but edge cases may still exist.
+- Model growth (increasing layers/parameters) is triggered by evaluation results and requires master approval.
+- The project is designed to evolve: expect rapid changes, new features, and breaking changes as it matures.
+
+## Contributing & Feedback
+- Contributions, bug reports, and suggestions are welcome! Please open issues or pull requests as appropriate.
+- For questions about usage or development, see the code comments and this Readme for guidance.

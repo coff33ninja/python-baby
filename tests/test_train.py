@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import MagicMock
 import types
 from train import train
 
@@ -25,7 +25,7 @@ def mock_dependencies(monkeypatch):
     mock_model.log_performance = MagicMock()
     mock_model.log_task_progress = MagicMock()
     mock_model.process_scraped_research_data = MagicMock()
-    mock_model.generate_code.return_value = "def foo():\n    return 42"
+    mock_model.generate_for_evaluation.return_value = "def foo():\n    return 42"
     mock_model.current_dataset_version = None
     mock_model.define_growth_tasks.return_value = {"stage1": {}, "stage2": {}}
     mock_model.get_research_scrape_targets.return_value = []

@@ -1149,18 +1149,6 @@ class PythonMasterAI(nn.Module):
         general_response = self.generate_for_evaluation(prompt_text=input_text, task_type="general", max_gen_length=100)
         return f"{self.stage.capitalize()} AI: {general_response}"
 
-    def generate_code(self, input_text):
-        logger.warning("generate_code() is deprecated. Use generate_for_evaluation() with task_type='code_generation'.")
-        return self.generate_for_evaluation(input_text, "code_generation", max_gen_length=200)
-
-    def generate_explanation(self, input_text):
-        logger.warning("generate_explanation() is deprecated. Use generate_for_evaluation() with task_type='concept_explanation'.")
-        return self.generate_for_evaluation(input_text, "concept_explanation", max_gen_length=150)
-
-    def debug_code(self, input_text):
-        logger.warning("debug_code() is deprecated and not fully implemented in generate_for_evaluation.")
-        return self.generate_for_evaluation(input_text, "debug_code_placeholder", max_gen_length=100)
-
     def process_input(self, input_text, user_key):
         master_auth_url = get_typed_config_value("master_service.auth_url", "http://localhost:8000/master/auth", str)
         try:
