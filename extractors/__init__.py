@@ -59,7 +59,7 @@ def extract_text_from_file(filepath: str) -> str | None:
 
     mime_type, _ = mimetypes.guess_type(filepath)
     file_ext = os.path.splitext(filepath)[1].lower()
-
+    
     text_content = None
     extractor_used = "None"
 
@@ -80,7 +80,7 @@ def extract_text_from_file(filepath: str) -> str | None:
                 extractor_used = "GenericExtractor (Text Type)"
             else:
                 logger.warning("GenericExtractor is None, cannot process text type.")
-
+        
         # For types not specifically text or handled by specific extractors above
         elif mime_type and not mime_type.startswith("text/") and \
              file_ext not in SPECIFICALLY_HANDLED_BINARY_EXTENSIONS and \
