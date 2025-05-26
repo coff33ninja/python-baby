@@ -67,6 +67,19 @@ class SaveToFilePipeline:
 
 class PythonSpider(scrapy.Spider):
     name = "python_spider"
+    DEFAULT_CONTENT_CRITERIA = {"min_length": 20} 
+    SOURCE_SPECIFIC_CONTENT_CRITERIA = {
+        "study_guides": {
+            "min_length": 50,
+            "must_not_contain_any": ["placeholder content", "coming soon", "under construction", "page not found"],
+        },
+        # Example for the generic 'else' case, can be same as default or slightly different
+        "default_else_criteria": { # Using a specific key for the generic 'else' if needed, or rely on default
+            "min_length": 25,
+             "must_not_contain_any": ["nothing to see here", "error processing request"],
+        }
+        # Add other source-specific criteria here as needed
+    }
 
     def __init__(self, source, url, version_data_dir, stage="baby", *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -90,11 +103,37 @@ class PythonSpider(scrapy.Spider):
                 meta["playwright"] = True
             yield scrapy.Request(url, callback=self.parse, meta=meta)
 
-    def parse(self, response):
-        # Helper function to check if content is meaningful
-        def is_content_meaningful(content_str):
-            return content_str and content_str.strip()
+    def _check_content_meaningfulness(self, content_str, criteria, source_name_for_log): # Added source_name_for_log
+        # Basic check for empty or whitespace-only content
+        if not content_str or not content_str.strip():
+            self.logger.debug(f"Content from source '{source_name_for_log}' failed basic check (empty or whitespace).")
+            return False
 
+        min_length = criteria.get("min_length", 0)
+        if len(content_str.strip()) < min_length:
+            self.logger.debug(f"Content from source '{source_name_for_log}' (length: {len(content_str.strip())}) failed min_length check of {min_length}. Criteria: {criteria}")
+            return False
+
+        must_contain_any = criteria.get("must_contain_any", [])
+        if must_contain_any and not any(keyword.lower() in content_str.lower() for keyword in must_contain_any):
+            self.logger.debug(f"Content from source '{source_name_for_log}' failed must_contain_any check. Missing all of: {must_contain_any}. Criteria: {criteria}")
+            return False
+            
+        must_contain_all = criteria.get("must_contain_all", [])
+        if must_contain_all and not all(keyword.lower() in content_str.lower() for keyword in must_contain_all):
+            self.logger.debug(f"Content from source '{source_name_for_log}' failed must_contain_all check. Not all present from: {must_contain_all}. Criteria: {criteria}")
+            return False
+
+        must_not_contain_any = criteria.get("must_not_contain_any", [])
+        if must_not_contain_any and any(keyword.lower() in content_str.lower() for keyword in must_not_contain_any):
+            found_forbidden = [keyword for keyword in must_not_contain_any if keyword.lower() in content_str.lower()]
+            self.logger.debug(f"Content from source '{source_name_for_log}' failed must_not_contain_any check. Found: {found_forbidden}. Criteria: {criteria}")
+            return False
+        
+        self.logger.debug(f"Content from source '{source_name_for_log}' passed all specific criteria: {criteria}")
+        return True
+
+    def parse(self, response):
         output_filename = f"{self.source}.txt"
         output_filepath = os.path.join(self.version_data_dir, output_filename)
         extracted_content = ""
@@ -102,60 +141,72 @@ class PythonSpider(scrapy.Spider):
 
         try:
             if "github" in self.source:
-                # github logic remains the same, assuming JSON response doesn't need this HTML fallback
+                # github logic remains the same, not using HTML parsing or _check_content_meaningfulness
                 data = response.json()
                 descriptions = [item["description"] for item in data.get("items", [])[:5] if item.get("description")]
                 extracted_content = "\n".join(descriptions)
                 parser_used = "JSON API"
+                # For GitHub, we might assume content is meaningful if present, or add specific checks if needed
+                # For now, it bypasses the new content meaningfulness checks for HTML.
             
             elif self.source == "study_guides":
                 self.logger.debug(f"Attempting to parse {response.url} for source '{self.source}' using Scrapy CSS selectors.")
-                # Primary attempt: Scrapy CSS selectors
-                text_list = response.css("p::text").getall()
-                extracted_content = " ".join(text_list).strip()
+                primary_text_list = response.css("p::text").getall() # Or more specific selectors for study_guides
+                extracted_content = " ".join(primary_text_list).strip()
+                parser_used = "Scrapy CSS Selector"
 
-                if not is_content_meaningful(extracted_content):
-                    self.logger.warning(f"Scrapy CSS selector parsing yielded no meaningful content for {response.url} (source: {self.source}). Falling back to BeautifulSoup.")
-                    soup = BeautifulSoup(response.text, 'lxml')
-                    paragraphs = soup.find_all('p')
-                    text_content_bs = [p.get_text(separator=' ', strip=True) for p in paragraphs]
-                    extracted_content = " ".join(text_content_bs).strip()
-                    parser_used = "BeautifulSoup"
-                    if is_content_meaningful(extracted_content):
-                        self.logger.info(f"Successfully parsed {response.url} (source: {self.source}) using BeautifulSoup after Scrapy CSS selector fallback.")
-                    else:
-                        self.logger.warning(f"BeautifulSoup parsing also yielded no meaningful content for {response.url} (source: {self.source}).")
+                current_criteria = self.SOURCE_SPECIFIC_CONTENT_CRITERIA.get(self.source, self.DEFAULT_CONTENT_CRITERIA)
+                
+                if self._check_content_meaningfulness(extracted_content, current_criteria, self.source):
+                    self.logger.info(f"Successfully parsed {response.url} (source: '{self.source}') using Scrapy CSS selectors, meeting specific criteria.")
                 else:
-                    self.logger.info(f"Successfully parsed {response.url} (source: {self.source}) using Scrapy CSS selectors.")
+                    self.logger.warning(f"Scrapy CSS selector parsing for '{self.source}' ({response.url}) failed source-specific content criteria. Falling back to BeautifulSoup.")
+                    
+                    soup = BeautifulSoup(response.text, 'lxml')
+                    paragraphs_bs = soup.find_all('p') 
+                    text_content_bs = [p.get_text(separator=' ', strip=True) for p in paragraphs_bs]
+                    extracted_content_bs = " ".join(text_content_bs).strip()
+                    
+                    # Assuming BS content is preferred if primary failed and BS found something.
+                    # No separate check for BS content meaningfulness here as per simplified example.
+                    if extracted_content_bs:
+                         self.logger.info(f"Successfully parsed {response.url} (source: '{self.source}') using BeautifulSoup after Scrapy CSS selector fallback.")
+                         extracted_content = extracted_content_bs 
+                         parser_used = "BeautifulSoup"
+                    else:
+                         self.logger.warning(f"BeautifulSoup parsing also yielded no meaningful content for {response.url} (source: '{self.source}'). Original Scrapy content (if any) will be used or content will be empty.")
+                         # extracted_content remains what Scrapy gave (which failed criteria), or empty.
+                         # parser_used could be updated to "BeautifulSoup (failed)" or kept as is.
 
             # Add other elif blocks for different sources here, applying the same fallback pattern if they parse HTML
-            # elif self.source == "another_html_source":
-            #    # ... primary attempt with response.css() ...
-            #    # ... if not is_content_meaningful(extracted_content): ...
-            #    # ... fallback to BeautifulSoup ...
             
             else: # Generic HTML parsing fallback for other sources
                 self.logger.debug(f"Attempting to parse {response.url} for source '{self.source}' using generic Scrapy CSS selectors (p tags).")
-                # Primary attempt: Scrapy CSS selectors
-                text_list = response.css("p::text").getall()
-                extracted_content = " ".join(text_list).strip()
+                primary_text_list = response.css("p::text").getall()
+                extracted_content = " ".join(primary_text_list).strip()
+                parser_used = "Scrapy CSS Selector"
 
-                if not is_content_meaningful(extracted_content):
-                    self.logger.warning(f"Generic Scrapy CSS selector parsing (p tags) yielded no meaningful content for {response.url} (source: {self.source}). Falling back to BeautifulSoup (p tags).")
-                    soup = BeautifulSoup(response.text, 'lxml')
-                    paragraphs = soup.find_all('p') # Basic p tag extraction for generic case
-                    text_content_bs = [p.get_text(separator=' ', strip=True) for p in paragraphs]
-                    extracted_content = " ".join(text_content_bs).strip()
-                    parser_used = "BeautifulSoup (generic p tags)"
-                    if is_content_meaningful(extracted_content):
-                        self.logger.info(f"Successfully parsed {response.url} (source: {self.source}) using BeautifulSoup (generic p tags) after Scrapy CSS selector fallback.")
-                    else:
-                        self.logger.warning(f"BeautifulSoup parsing (generic p tags) also yielded no meaningful content for {response.url} (source: {self.source}).")
+                # Use "default_else_criteria" for the generic 'else' case
+                current_criteria = self.SOURCE_SPECIFIC_CONTENT_CRITERIA.get("default_else_criteria", self.DEFAULT_CONTENT_CRITERIA)
+
+                if self._check_content_meaningfulness(extracted_content, current_criteria, self.source):
+                    self.logger.info(f"Successfully parsed {response.url} (source: '{self.source}') using generic Scrapy CSS selectors, meeting specific criteria.")
                 else:
-                    self.logger.info(f"Successfully parsed {response.url} (source: {self.source}) using generic Scrapy CSS selectors (p tags).")
+                    self.logger.warning(f"Generic Scrapy CSS selector parsing for '{self.source}' ({response.url}) failed source-specific content criteria. Falling back to BeautifulSoup.")
+                    
+                    soup = BeautifulSoup(response.text, 'lxml')
+                    paragraphs_bs = soup.find_all('p') # Basic p tag extraction
+                    text_content_bs = [p.get_text(separator=' ', strip=True) for p in paragraphs_bs]
+                    extracted_content_bs = " ".join(text_content_bs).strip()
+                    
+                    if extracted_content_bs:
+                         self.logger.info(f"Successfully parsed {response.url} (source: '{self.source}') using BeautifulSoup (generic p tags) after Scrapy CSS selector fallback.")
+                         extracted_content = extracted_content_bs
+                         parser_used = "BeautifulSoup (generic p tags)"
+                    else:
+                         self.logger.warning(f"BeautifulSoup parsing (generic p tags) also yielded no meaningful content for {response.url} (source: '{self.source}'). Original Scrapy content (if any) will be used or content will be empty.")
 
             # Common yield statement
-            # Ensure content is truncated AFTER deciding which parser's content to use.
             yield {
                 "content": extracted_content[:1000] if extracted_content else "", # Truncate after extraction
                 "file": output_filepath,
