@@ -13,7 +13,7 @@ class GenericExtractor:
         """
         Extracts text from presumably text-based files.
         Tries common encodings.
-        If is_likely_text is False, it's more cautious and might only try UTF-8 
+        If is_likely_text is False, it's more cautious and might only try UTF-8
         or skip if file size is very large.
         Returns None if extraction fails or content is empty after strip.
         """
@@ -45,7 +45,7 @@ class GenericExtractor:
             encodings_to_try = list(GenericExtractor.COMMON_ENCODINGS)
             if detected_encoding and detected_encoding.lower() not in [enc.lower() for enc in encodings_to_try]:
                 encodings_to_try.insert(0, detected_encoding) # Prioritize detected encoding
-            
+
             # For files not flagged as likely text, be more conservative with encodings
             if not is_likely_text:
                 encodings_to_try = [detected_encoding] if detected_encoding else ['utf-8']
@@ -61,7 +61,7 @@ class GenericExtractor:
                         if null_bytes_ratio > 0.1: # If more than 10% null bytes, likely not text
                             logger.debug(f"File {filepath} decoded with {encoding} but has high null byte ratio ({null_bytes_ratio:.2f}). Likely not text.")
                             continue # Try next encoding or fail
-                    
+
                     logger.debug(f"Successfully decoded {filepath} with {encoding}")
                     return content.strip() if content.strip() else None
                 except UnicodeDecodeError:

@@ -69,7 +69,7 @@ class SaveToFilePipeline:
 
             parsed_url = urlparse(source_url)
             domain = sanitize_path_segment(parsed_url.netloc)
-            
+
             # Handle path segments carefully
             path_from_url = parsed_url.path.strip('/')
             path_segments_raw = [seg for seg in path_from_url.split('/') if seg] # Get raw segments
@@ -77,7 +77,7 @@ class SaveToFilePipeline:
             # Determine filename
             # Default filename if path ends in / or is empty
             potential_filename_from_path = os.path.basename(parsed_url.path)
-            
+
             filename = "index.dat" # Ultimate fallback
             has_extension = '.' in potential_filename_from_path
 
@@ -97,14 +97,14 @@ class SaveToFilePipeline:
                 # If path_segments_raw is not empty and filename is still index.dat (or similar default)
                 # it means the last segment of the URL path was not treated as a file.
                 # e.g. for /foo/bar, path_segments_raw = ["foo", "bar"], filename="index.html" (if text/html)
-            
+
             # Sanitize all raw path segments
             true_path_segments = [sanitize_path_segment(seg) for seg in path_segments_raw]
 
             archive_base_dir = os.path.join(version_dir, "archived_sites")
             target_dir_path = os.path.join(archive_base_dir, domain, *true_path_segments)
             archive_file_path = os.path.join(target_dir_path, filename) # filename is already sanitized
-            
+
             try:
                 os.makedirs(target_dir_path, exist_ok=True)
                 with open(archive_file_path, "wb") as f: # Write bytes
@@ -126,14 +126,14 @@ class SaveToFilePipeline:
                 content = "" # Default to empty string if None
 
             # This os.makedirs is for the .txt file
-            os.makedirs(os.path.dirname(file_path), exist_ok=True) 
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
             try:
                 with open(file_path, "a", encoding="utf-8") as f:
                     f.write(content + "\n")
                 spider.logger.debug(f"Appended content to {file_path} for source {item.get('source')}")
             except Exception as e:
                 spider.logger.error(f"Error writing to file {file_path}: {e}", exc_info=True)
-            
+
             source_url = item.get("source_url") # This is for the .meta.json file
             if source_url:
                 meta_file_path = file_path + ".meta.json"
@@ -155,7 +155,7 @@ class SaveToFilePipeline:
 
 class PythonSpider(scrapy.Spider):
     name = "python_spider"
-    DEFAULT_CONTENT_CRITERIA = {"min_length": 20} 
+    DEFAULT_CONTENT_CRITERIA = {"min_length": 20}
     SOURCE_SPECIFIC_CONTENT_CRITERIA = {
         "study_guides": {
             "min_length": 50,
@@ -206,7 +206,7 @@ class PythonSpider(scrapy.Spider):
         if must_contain_any and not any(keyword.lower() in content_str.lower() for keyword in must_contain_any):
             self.logger.debug(f"Content from source '{source_name_for_log}' failed must_contain_any check. Missing all of: {must_contain_any}. Criteria: {criteria}")
             return False
-            
+
         must_contain_all = criteria.get("must_contain_all", [])
         if must_contain_all and not all(keyword.lower() in content_str.lower() for keyword in must_contain_all):
             self.logger.debug(f"Content from source '{source_name_for_log}' failed must_contain_all check. Not all present from: {must_contain_all}. Criteria: {criteria}")
@@ -217,7 +217,7 @@ class PythonSpider(scrapy.Spider):
             found_forbidden = [keyword for keyword in must_not_contain_any if keyword.lower() in content_str.lower()]
             self.logger.debug(f"Content from source '{source_name_for_log}' failed must_not_contain_any check. Found: {found_forbidden}. Criteria: {criteria}")
             return False
-        
+
         self.logger.debug(f"Content from source '{source_name_for_log}' passed all specific criteria: {criteria}")
         return True
 
@@ -236,7 +236,7 @@ class PythonSpider(scrapy.Spider):
                 parser_used = "JSON API"
                 # For GitHub, we might assume content is meaningful if present, or add specific checks if needed
                 # For now, it bypasses the new content meaningfulness checks for HTML.
-            
+
             elif self.source == "study_guides":
                 self.logger.debug(f"Attempting to parse {response.url} for source '{self.source}' using Scrapy CSS selectors.")
                 primary_text_list = response.css("p::text").getall() # Or more specific selectors for study_guides
@@ -244,22 +244,22 @@ class PythonSpider(scrapy.Spider):
                 parser_used = "Scrapy CSS Selector"
 
                 current_criteria = self.SOURCE_SPECIFIC_CONTENT_CRITERIA.get(self.source, self.DEFAULT_CONTENT_CRITERIA)
-                
+
                 if self._check_content_meaningfulness(extracted_content, current_criteria, self.source):
                     self.logger.info(f"Successfully parsed {response.url} (source: '{self.source}') using Scrapy CSS selectors, meeting specific criteria.")
                 else:
                     self.logger.warning(f"Scrapy CSS selector parsing for '{self.source}' ({response.url}) failed source-specific content criteria. Falling back to BeautifulSoup.")
-                    
+
                     soup = BeautifulSoup(response.text, 'lxml')
-                    paragraphs_bs = soup.find_all('p') 
+                    paragraphs_bs = soup.find_all('p')
                     text_content_bs = [p.get_text(separator=' ', strip=True) for p in paragraphs_bs]
                     extracted_content_bs = " ".join(text_content_bs).strip()
-                    
+
                     # Assuming BS content is preferred if primary failed and BS found something.
                     # No separate check for BS content meaningfulness here as per simplified example.
                     if extracted_content_bs:
                          self.logger.info(f"Successfully parsed {response.url} (source: '{self.source}') using BeautifulSoup after Scrapy CSS selector fallback.")
-                         extracted_content = extracted_content_bs 
+                         extracted_content = extracted_content_bs
                          parser_used = "BeautifulSoup"
                     else:
                          self.logger.warning(f"BeautifulSoup parsing also yielded no meaningful content for {response.url} (source: '{self.source}'). Original Scrapy content (if any) will be used or content will be empty.")
@@ -267,7 +267,7 @@ class PythonSpider(scrapy.Spider):
                          # parser_used could be updated to "BeautifulSoup (failed)" or kept as is.
 
             # Add other elif blocks for different sources here, applying the same fallback pattern if they parse HTML
-            
+
             else: # Generic HTML parsing fallback for other sources
                 self.logger.debug(f"Attempting to parse {response.url} for source '{self.source}' using generic Scrapy CSS selectors (p tags).")
                 primary_text_list = response.css("p::text").getall()
@@ -281,12 +281,12 @@ class PythonSpider(scrapy.Spider):
                     self.logger.info(f"Successfully parsed {response.url} (source: '{self.source}') using generic Scrapy CSS selectors, meeting specific criteria.")
                 else:
                     self.logger.warning(f"Generic Scrapy CSS selector parsing for '{self.source}' ({response.url}) failed source-specific content criteria. Falling back to BeautifulSoup.")
-                    
+
                     soup = BeautifulSoup(response.text, 'lxml')
                     paragraphs_bs = soup.find_all('p') # Basic p tag extraction
                     text_content_bs = [p.get_text(separator=' ', strip=True) for p in paragraphs_bs]
                     extracted_content_bs = " ".join(text_content_bs).strip()
-                    
+
                     if extracted_content_bs:
                          self.logger.info(f"Successfully parsed {response.url} (source: '{self.source}') using BeautifulSoup (generic p tags) after Scrapy CSS selector fallback.")
                          extracted_content = extracted_content_bs
@@ -314,11 +314,11 @@ class PythonSpider(scrapy.Spider):
                 self.logger.info(f"Yielding archive item for {response.url} (source: {self.source})")
                 yield {
                     "source_url": response.url,
-                    "source_name": self.source, 
+                    "source_name": self.source,
                     "version_data_dir": self.version_data_dir,
                     "is_archive_item": True,
                     "raw_response_body": response.body, # bytes
-                    "response_headers": {k.decode('utf-8', 'ignore'): [v.decode('utf-8', 'ignore') for v in vs] 
+                    "response_headers": {k.decode('utf-8', 'ignore'): [v.decode('utf-8', 'ignore') for v in vs]
                                          for k, vs in response.headers.items()}
                 }
 
@@ -369,12 +369,12 @@ def discover_urls_from_query(query_str: str, api_config: dict):
     github_pat = api_keys.get("github_pat")
     github_repo_search_url = api_endpoints.get("github_search_repositories")
     # Use a generic query parameter or make it configurable if needed
-    github_repo_query_params = search_params_config.get("github_repo_default_query_params", "sort=stars&order=desc") 
+    github_repo_query_params = search_params_config.get("github_repo_default_query_params", "sort=stars&order=desc")
 
     if github_pat and github_pat != "YOUR_GITHUB_PERSONAL_ACCESS_TOKEN_HERE" and github_repo_search_url:
         headers = {"Authorization": f"token {github_pat}", "Accept": "application/vnd.github.v3+json"}
         # Form a query: use the input query_str directly, append "python"
-        search_query_github_repos = f"{query_str} python" 
+        search_query_github_repos = f"{query_str} python"
         full_github_repo_url = f"{github_repo_search_url}?q={search_query_github_repos}&{github_repo_query_params}"
         logger.info(f"Scraper: Querying GitHub Repos: {full_github_repo_url}")
         try:
@@ -401,7 +401,7 @@ def discover_urls_from_query(query_str: str, api_config: dict):
 
     if google_api_key and google_api_key != "YOUR_GOOGLE_CSE_API_KEY_HERE" and \
        google_cx_id and google_cx_id != "YOUR_GOOGLE_CSE_CX_ID_HERE" and google_search_url:
-        
+
         full_google_url = f"{google_search_url}?key={google_api_key}&cx={google_cx_id}&q={query_str}&num={google_num_results}"
         logger.info(f"Scraper: Querying Google CSE: {full_google_url}")
         try:
@@ -421,7 +421,7 @@ def discover_urls_from_query(query_str: str, api_config: dict):
             logger.error(f"Scraper: Google Custom Search API failed for query '{query_str}': {e}")
         except json.JSONDecodeError as e:
              logger.error(f"Scraper: Failed to parse Google Custom Search API response for query '{query_str}': {e}")
-    
+
     logger.info(f"Scraper: Discovered {len(candidates)} potential new sources for query '{query_str}'.")
     return candidates
 
@@ -447,14 +447,14 @@ def clone_repo(repo_url: str, target_base_dir: str, depth: int = 1) -> str | Non
         # Derive repo name from URL to create a subdirectory
         # e.g., https://github.com/user/myrepo.git -> myrepo
         repo_name_with_ext = os.path.basename(repo_url)
-        repo_name = os.path.splitext(repo_name_with_ext)[0] 
+        repo_name = os.path.splitext(repo_name_with_ext)[0]
         if not repo_name: # Handle cases like http://github.com/user/myrepo (no .git extension)
             repo_name = os.path.basename(repo_url.rstrip('/'))
 
         if not repo_name: # Still no repo name (e.g. strange URL or just domain)
             logger.error(f"Could not derive repository name from URL: {repo_url}")
             return None
-        
+
         # Sanitize repo_name just in case, though os.path.basename usually gives valid part
         # This also handles if repo_name was derived from a path like "user/myrepo"
         repo_name = "".join(c if c.isalnum() else "_" for c in repo_name.replace('/', '_'))
@@ -467,19 +467,19 @@ def clone_repo(repo_url: str, target_base_dir: str, depth: int = 1) -> str | Non
             # Option: Could add logic here to pull changes if it's already a git repo,
             # or remove and re-clone if a force_clone flag is added.
             # For now, just skip if path exists.
-            return clone_target_path 
-        
+            return clone_target_path
+
         logger.info(f"Cloning repository {repo_url} into {clone_target_path} with depth {depth if depth else 'full'}.")
-        
+
         clone_options = {}
         if depth and depth > 0:
             clone_options['depth'] = depth
-        
+
         # Ensure target_base_dir exists before trying to clone into a subdir of it
         os.makedirs(target_base_dir, exist_ok=True)
 
         git.Repo.clone_from(repo_url, clone_target_path, **clone_options)
-        
+
         logger.info(f"Successfully cloned {repo_url} to {clone_target_path}.")
         return clone_target_path
 
@@ -495,7 +495,7 @@ def clone_repo(repo_url: str, target_base_dir: str, depth: int = 1) -> str | Non
         return None
     except Exception as e:
         logger.error(f"An unexpected error occurred while cloning {repo_url}: {e}", exc_info=True)
-        if clone_target_path and os.path.exists(clone_target_path): 
+        if clone_target_path and os.path.exists(clone_target_path):
             try:
                 shutil.rmtree(clone_target_path)
                 logger.info(f"Removed directory due to unexpected error during clone: {clone_target_path}")
@@ -575,9 +575,9 @@ def fetch_pypi_updates(package_name: str, version_data_dir: str):
     except (requests.RequestException, RetryError) as e: # Catch RetryError from tenacity
         logger.error(f"Error fetching PyPI data for {package_name}: {e}", exc_info=True)
         return {
-            "package_name": package_name, 
-            "summary_file_saved": None, 
-            "readme_file_saved": None, 
+            "package_name": package_name,
+            "summary_file_saved": None,
+            "readme_file_saved": None,
             "raw_json_file_saved": None, # Add here
             "error": str(e)
         }
@@ -747,12 +747,12 @@ if __name__ == "__main__":
         if not api_config_loaded:
             logger.error("API config not loaded. Cannot proceed with query-based discovery. Exiting.")
             sys.exit(1)
-        
+
         discovered_sources = discover_urls_from_query(query_arg, api_config_loaded)
         if not discovered_sources:
             logger.warning(f"No sources discovered for query '{query_arg}'. Nothing to scrape.")
             sys.exit(0)
-        
+
         sources_to_scrape_names = [s_info[0] for s_info in discovered_sources]
         sources_to_scrape_urls = [s_info[1] for s_info in discovered_sources]
         logger.info(f"Discovered {len(sources_to_scrape_names)} sources to scrape: {sources_to_scrape_names}")
@@ -764,7 +764,7 @@ if __name__ == "__main__":
         sources_to_scrape_names = [source_url_pairs_arg[i] for i in range(0, len(source_url_pairs_arg), 2)]
         sources_to_scrape_urls = [source_url_pairs_arg[i] for i in range(1, len(source_url_pairs_arg), 2)]
         logger.info(f"Direct mode: Scraping specified {len(sources_to_scrape_names)} sources.")
-    
+
     # Default to PyPI docs if no other sources are specified by query or direct input
     # (This maintains part of the original logic for ensuring some data is always available for certain stages)
     if not sources_to_scrape_names and "pypi_docs" not in sources_to_scrape_names :

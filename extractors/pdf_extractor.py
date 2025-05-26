@@ -27,7 +27,7 @@ class PdfExtractor:
                 for page_num in range(num_pages):
                     page = reader.pages[page_num]
                     extracted_texts.append(page.extract_text() or "") # Ensure None from extract_text is handled
-            
+
             full_text = "\n\n--- Page Break ---\n\n".join(extracted_texts)
             return full_text.strip() if full_text.strip() else None
         except FileNotFoundError:

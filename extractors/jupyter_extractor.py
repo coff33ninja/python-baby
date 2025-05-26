@@ -16,8 +16,8 @@ class JupyterExtractor:
             with open(filepath, 'r', encoding='utf-8') as f:
                 # nbformat.read is preferred over json.load for notebooks
                 # as it validates notebook structure.
-                notebook = nbformat.read(f, as_version=nbformat.NO_CONVERT) 
-            
+                notebook = nbformat.read(f, as_version=nbformat.NO_CONVERT)
+
             extracted_texts = []
             for cell in notebook.get('cells', []):
                 if cell.get('cell_type') == 'markdown':
@@ -25,7 +25,7 @@ class JupyterExtractor:
                 elif cell.get('cell_type') == 'code':
                     # Could also include outputs if desired, but source is primary for now
                     extracted_texts.append(cell.get('source', ''))
-            
+
             full_text = "\n\n---\n\n".join(extracted_texts) # Separate cells clearly
             return full_text.strip() if full_text.strip() else None
         except FileNotFoundError:
