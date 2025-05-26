@@ -11,6 +11,11 @@ import json
 import argparse # Added for command-line argument processing
 from urllib.parse import urlparse # Added for URL parsing in discovery
 import re # For sanitization
+import shutil # For removing directory if clone fails partway
+try:
+    import git # GitPython library
+except ImportError:
+    git = None # Allows module to load/be tested if GitPython not installed yet
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -419,6 +424,84 @@ def discover_urls_from_query(query_str: str, api_config: dict):
     
     logger.info(f"Scraper: Discovered {len(candidates)} potential new sources for query '{query_str}'.")
     return candidates
+
+def clone_repo(repo_url: str, target_base_dir: str, depth: int = 1) -> str | None:
+    """
+    Clones a Git repository from repo_url into a subdirectory within target_base_dir.
+    The subdirectory will be named after the repository.
+
+    Args:
+        repo_url: The URL of the Git repository to clone.
+        target_base_dir: The base directory where the repo's directory will be created.
+        depth: The depth for a shallow clone. Default is 1. Use 0 or None for full clone.
+
+    Returns:
+        The full path to the cloned repository locally, or None if cloning failed.
+    """
+    if git is None:
+        logger.error("GitPython library is not installed. Repository cloning is disabled.")
+        return None
+
+    clone_target_path = None # Define outside try for cleanup access
+    try:
+        # Derive repo name from URL to create a subdirectory
+        # e.g., https://github.com/user/myrepo.git -> myrepo
+        repo_name_with_ext = os.path.basename(repo_url)
+        repo_name = os.path.splitext(repo_name_with_ext)[0] 
+        if not repo_name: # Handle cases like http://github.com/user/myrepo (no .git extension)
+            repo_name = os.path.basename(repo_url.rstrip('/'))
+
+        if not repo_name: # Still no repo name (e.g. strange URL or just domain)
+            logger.error(f"Could not derive repository name from URL: {repo_url}")
+            return None
+        
+        # Sanitize repo_name just in case, though os.path.basename usually gives valid part
+        # This also handles if repo_name was derived from a path like "user/myrepo"
+        repo_name = "".join(c if c.isalnum() else "_" for c in repo_name.replace('/', '_'))
+
+
+        clone_target_path = os.path.join(target_base_dir, repo_name)
+
+        if os.path.exists(clone_target_path):
+            logger.info(f"Repository directory already exists: {clone_target_path}. Assuming already cloned or handled. Skipping clone.")
+            # Option: Could add logic here to pull changes if it's already a git repo,
+            # or remove and re-clone if a force_clone flag is added.
+            # For now, just skip if path exists.
+            return clone_target_path 
+        
+        logger.info(f"Cloning repository {repo_url} into {clone_target_path} with depth {depth if depth else 'full'}.")
+        
+        clone_options = {}
+        if depth and depth > 0:
+            clone_options['depth'] = depth
+        
+        # Ensure target_base_dir exists before trying to clone into a subdir of it
+        os.makedirs(target_base_dir, exist_ok=True)
+
+        git.Repo.clone_from(repo_url, clone_target_path, **clone_options)
+        
+        logger.info(f"Successfully cloned {repo_url} to {clone_target_path}.")
+        return clone_target_path
+
+    except git.exc.GitCommandError as e:
+        logger.error(f"GitCommandError while cloning {repo_url}: {e.stderr if hasattr(e, 'stderr') else e}", exc_info=True)
+        # If clone failed, remove partially created directory if it exists
+        if clone_target_path and os.path.exists(clone_target_path):
+            try:
+                shutil.rmtree(clone_target_path)
+                logger.info(f"Removed partially cloned directory: {clone_target_path}")
+            except Exception as remove_err:
+                logger.error(f"Error removing partially cloned directory {clone_target_path}: {remove_err}")
+        return None
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while cloning {repo_url}: {e}", exc_info=True)
+        if clone_target_path and os.path.exists(clone_target_path): 
+            try:
+                shutil.rmtree(clone_target_path)
+                logger.info(f"Removed directory due to unexpected error during clone: {clone_target_path}")
+            except Exception as remove_err:
+                logger.error(f"Error removing directory {clone_target_path} after unexpected error: {remove_err}")
+        return None
 
 @retry(
     stop=stop_after_attempt(

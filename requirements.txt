@@ -17,6 +17,11 @@ playwright
 beautifulsoup4
 lxml
 
+# File Content Extraction and Git Operations
+GitPython  # For cloning repositories
+nbformat   # For parsing Jupyter Notebooks (.ipynb)
+chardet    # For detecting file encodings in GenericExtractor
+
 # GUI
 gradio
 
