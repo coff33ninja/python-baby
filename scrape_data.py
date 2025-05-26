@@ -2,6 +2,7 @@
 import requests
 import scrapy
 from scrapy.crawler import CrawlerProcess
+from bs4 import BeautifulSoup
 import os
 import time
 import logging  # Standard logging
@@ -90,42 +91,88 @@ class PythonSpider(scrapy.Spider):
             yield scrapy.Request(url, callback=self.parse, meta=meta)
 
     def parse(self, response):
+        # Helper function to check if content is meaningful
+        def is_content_meaningful(content_str):
+            return content_str and content_str.strip()
+
         output_filename = f"{self.source}.txt"
         output_filepath = os.path.join(self.version_data_dir, output_filename)
+        extracted_content = ""
+        parser_used = "Scrapy CSS Selector" # Default parser
+
         try:
-            # ... (rest of parsing logic remains the same, using self.logger for Scrapy-specific logging) ...
             if "github" in self.source:
+                # github logic remains the same, assuming JSON response doesn't need this HTML fallback
                 data = response.json()
-                for item_data in data.get("items", [])[:5]:
-                    yield {
-                        "content": item_data["description"] or "",
-                        "file": output_filepath,
-                        "source": self.source,
-                    }
+                descriptions = [item["description"] for item in data.get("items", [])[:5] if item.get("description")]
+                extracted_content = "\n".join(descriptions)
+                parser_used = "JSON API"
+            
             elif self.source == "study_guides":
-                text = response.css("p::text").getall()
-                yield {
-                    "content": " ".join(text)[:1000],
-                    "file": output_filepath,
-                    "source": self.source,
-                }
-            # ... (other elif blocks for different sources) ...
-            else:
-                text = response.css("p::text").getall()
-                yield {
-                    "content": " ".join(text)[:1000],
-                    "file": output_filepath,
-                    "source": self.source,
-                }
+                self.logger.debug(f"Attempting to parse {response.url} for source '{self.source}' using Scrapy CSS selectors.")
+                # Primary attempt: Scrapy CSS selectors
+                text_list = response.css("p::text").getall()
+                extracted_content = " ".join(text_list).strip()
+
+                if not is_content_meaningful(extracted_content):
+                    self.logger.warning(f"Scrapy CSS selector parsing yielded no meaningful content for {response.url} (source: {self.source}). Falling back to BeautifulSoup.")
+                    soup = BeautifulSoup(response.text, 'lxml')
+                    paragraphs = soup.find_all('p')
+                    text_content_bs = [p.get_text(separator=' ', strip=True) for p in paragraphs]
+                    extracted_content = " ".join(text_content_bs).strip()
+                    parser_used = "BeautifulSoup"
+                    if is_content_meaningful(extracted_content):
+                        self.logger.info(f"Successfully parsed {response.url} (source: {self.source}) using BeautifulSoup after Scrapy CSS selector fallback.")
+                    else:
+                        self.logger.warning(f"BeautifulSoup parsing also yielded no meaningful content for {response.url} (source: {self.source}).")
+                else:
+                    self.logger.info(f"Successfully parsed {response.url} (source: {self.source}) using Scrapy CSS selectors.")
+
+            # Add other elif blocks for different sources here, applying the same fallback pattern if they parse HTML
+            # elif self.source == "another_html_source":
+            #    # ... primary attempt with response.css() ...
+            #    # ... if not is_content_meaningful(extracted_content): ...
+            #    # ... fallback to BeautifulSoup ...
+            
+            else: # Generic HTML parsing fallback for other sources
+                self.logger.debug(f"Attempting to parse {response.url} for source '{self.source}' using generic Scrapy CSS selectors (p tags).")
+                # Primary attempt: Scrapy CSS selectors
+                text_list = response.css("p::text").getall()
+                extracted_content = " ".join(text_list).strip()
+
+                if not is_content_meaningful(extracted_content):
+                    self.logger.warning(f"Generic Scrapy CSS selector parsing (p tags) yielded no meaningful content for {response.url} (source: {self.source}). Falling back to BeautifulSoup (p tags).")
+                    soup = BeautifulSoup(response.text, 'lxml')
+                    paragraphs = soup.find_all('p') # Basic p tag extraction for generic case
+                    text_content_bs = [p.get_text(separator=' ', strip=True) for p in paragraphs]
+                    extracted_content = " ".join(text_content_bs).strip()
+                    parser_used = "BeautifulSoup (generic p tags)"
+                    if is_content_meaningful(extracted_content):
+                        self.logger.info(f"Successfully parsed {response.url} (source: {self.source}) using BeautifulSoup (generic p tags) after Scrapy CSS selector fallback.")
+                    else:
+                        self.logger.warning(f"BeautifulSoup parsing (generic p tags) also yielded no meaningful content for {response.url} (source: {self.source}).")
+                else:
+                    self.logger.info(f"Successfully parsed {response.url} (source: {self.source}) using generic Scrapy CSS selectors (p tags).")
+
+            # Common yield statement
+            # Ensure content is truncated AFTER deciding which parser's content to use.
+            yield {
+                "content": extracted_content[:1000] if extracted_content else "", # Truncate after extraction
+                "file": output_filepath,
+                "source": self.source,
+                "parser_used": parser_used # For logging/debugging
+            }
+
         except Exception as e:
             self.logger.error(
-                f"Error parsing {response.url} for source {self.source}. Content might be incomplete or missing. Error: {e}",
+                f"Error parsing {response.url} for source {self.source}. Parser used at time of error: {parser_used}. Error: {e}",
                 exc_info=True,
             )
             yield {
                 "content": f"Error processing {self.source}. See logs.",
                 "file": output_filepath,
                 "source": self.source,
+                "parser_used": parser_used, # Log parser even in case of error
             }
 
 

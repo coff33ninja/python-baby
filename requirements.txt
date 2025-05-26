@@ -13,6 +13,9 @@ requests
 Scrapy
 scrapy-playwright
 playwright
+# For HTML Parsing (with fallback mechanism)
+beautifulsoup4
+lxml
 
 # GUI
 gradio
