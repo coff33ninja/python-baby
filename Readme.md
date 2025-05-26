@@ -1,96 +1,152 @@
-Setup Instructions
+# PythonMasterAI Project
 
-    Environment (run in a virtual environment for safety):
-    bash
+## Project Overview
+PythonMasterAI is a self-improving AI designed to master Python programming through various stages of growth, from "baby" to "adult". It learns by scraping data, conducting research, and eventually training itself. The project features a Gradio-based GUI for interaction and control.
 
-pip install torch transformers datasets fastapi uvicorn requests scrapy-playwright pytest gradio PyPDF2
-playwright install
-Dataset:
+## Setup Instructions
 
-    Run scrape_data.py to initialize:
-    bash
+1.  **Create and activate a Python virtual environment** (e.g., using `venv` or `conda`). It's recommended to use Python 3.9 or newer.
+    ```bash
+    python -m venv .venv
+    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+    ```
+2.  **Install dependencies from `requirements.txt`:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+3.  **Install Playwright browsers** (needed by `scrapy-playwright` for web scraping):
+    ```bash
+    playwright install
+    ```
 
-    python scrape_data.py
+## Running the System
 
-Master Key API:
+### Dataset Initialization:
 
-    Save master_key.py in /secure/ (read-only).
-    Run in Docker:
-    bash
+Run `scrape_data.py` to initialize the dataset for a specific stage (e.g., "baby"). This will create a versioned dataset.
+```bash
+python scrape_data.py baby # Scrapes default sources for baby stage
+# Or specify sources:
+# python scrape_data.py baby github_beginner https://api.github.com/search/repositories?q=language:python+stars:>100
+```
 
-    docker run -d -p 8000:8000 -v $(pwd)/master_key.py:/app/master_key.py:ro python:3.11 bash -c "pip install fastapi uvicorn && uvicorn master_key:app --host 0.0.0.0 --port 8000"
+### Master Key API:
 
-Train:
+The Master Key API (`master_key.py`) is used for approving critical actions like model growth.
+For security, it's recommended to run this in a controlled environment.
 
-    Run train.py (~6 hours on CPU):
-    bash
+1.  Ensure `master_key.py` is present (it's part of the repository).
+2.  Run using Docker (example):
+    ```bash
+    docker run -d -p 8000:8000 -v $(pwd)/master_key.py:/app/master_key.py:ro python:3.11-slim bash -c "pip install fastapi uvicorn && uvicorn master_key:app --host 0.0.0.0 --port 8000"
+    ```
+    *(Note: Adjust `python:3.11-slim` if your `requirements.txt` implies a different Python version for FastAPI/Uvicorn compatibility, though they are generally flexible.)*
 
-    python train.py
+### Training:
 
-Interact:
+Run `train.py` for a specific stage. The script will use the latest versioned dataset for that stage.
+```bash
+python train.py --stage baby
+```
+Training duration varies based on the stage and hardware (e.g., ~6 hours on CPU for the initial baby stage with limited data). The model will save checkpoints in the `checkpoints/` directory.
 
-    Run gui.py to launch Gradio:
-    bash
+### Interaction via GUI:
 
-    python gui.py
-    Master Commands:
-        MASTER: Write a function → “Serving Master: Baby AI: Generated code:\npython\ndef add(a, b):\n return a + b\n”
-        MASTER: Explain variables → “Serving Master: Baby AI: A variable is a name that stores data...”
-        HALT_TEEN → “Baby paused by Master’s stop code”
-    Research: Click “Trigger Research” to see logs.
-    Source Discovery: Click “Discover Sources” to view new sources.
-    Status: Click “Get Status” for stage, tasks, gaps, sources.
-    Growth: Enter Master key, click “Approve Growth” after tasks.
+Run `gui.py` to launch the Gradio interface for interacting with and managing the AI.
+```bash
+python gui.py
+```
+The GUI provides tabs for:
+*   **Master Commands:** Send commands to the AI (e.g., "MASTER: Write a function").
+*   **Research:** Trigger the AI's research process.
+*   **Source Discovery:** Initiate discovery of new data sources.
+*   **Status:** View the AI's current status (stage, parameters, tasks, etc.).
+*   **Growth:** Approve model growth to the next stage (requires Master Key).
+*   **Manual Data Upload:** Upload additional training data to a specific stage's dataset.
+*   **Run Training/Scraper Scripts:** Trigger `train.py` or `scrape_data.py` from the GUI.
+*   **Model Management:** Manually trigger loading of the latest checkpoint.
+*   **Dataset Management:** Explore dataset versions, view manifest files, preview file contents, set the "latest" version for a stage, and exclude/include files from training.
 
-Grow:
+### Model Growth:
 
-    Use Gradio or run grow.py:
-    bash
+Model growth can be initiated via the "Growth" tab in the Gradio GUI (requires Master Key) or by running `grow.py` directly after the AI has met its growth criteria for the current stage.
+```bash
+python grow.py
+```
+This script creates a new, more complex model instance, attempts to transfer weights from the previous model, and saves an initial checkpoint for the new configuration.
 
-        python grow.py
+### Evaluation:
 
-Current Capabilities (Baby Stage)
+The `evaluate.py` script runs a formal evaluation suite to test the AI's capabilities on various tasks.
+```bash
+python evaluate.py --model_checkpoint_path <path_to_checkpoint.pt> --eval_dataset_path sample_evaluation_dataset.jsonl --output_dir eval_results
+```
+See `sample_evaluation_dataset.jsonl` for task examples. Evaluation results, including detailed logs and a summary, will be saved in the specified output directory (default: `eval_results`).
 
-    Python: Generates functions (e.g., def add(a, b):).
-    Explanations: Explains variables with sources.
-    Self-Scraping: Collects GitHub, study guides, Stack Overflow, Reddit.
-    Self-Research: Identifies gaps, queries tutorials, validates data.
-    Self-Source Discovery: Finds new sources (simulated, e.g., “python_blog”).
-    Self-Growth: Tracks tasks (10 functions, 5 explanations, 3 research, 2 sources, 80% accuracy).
-    Master Commands: Loyal responses.
-    Stop Code: Pauses on HALT_TEEN.
-    Gradio GUI: Controls all functions, shows real-time status.
 
-Next Steps
+## Current Capabilities (Baby Stage - Example)
 
-    Custom Tokenizer: Train ByteLevelBPETokenizer on Python data.
-    Real Source Search: Integrate Google API or GitHub API for search_for_sources.
-    Unit Tests: Expand for all tasks.
-    RAG: Add LangChain for real-time queries.
-    Teenager Prep: Scale to toddler, add class tasks.
+*   **Python Code Generation:** Generates simple Python functions (e.g., `def add(a, b): return a + b`).
+*   **Explanations:** Provides basic explanations for Python concepts or code snippets.
+*   **Self-Scraping & Data Versioning:** Collects data from sources like GitHub, study guides, Stack Overflow, and Reddit. Datasets are versioned with timestamps and manifests.
+*   **Self-Research:** Identifies knowledge gaps, formulates queries, and processes scraped data to fill these gaps.
+*   **Self-Source Discovery:** Simulates finding new data sources.
+*   **Self-Growth & Checkpointing:** Tracks task completion for growth. Model checkpoints are saved during training and after growth. Grown models use a weight seeding strategy.
+*   **Master Commands & Stop Code:** Responds to master commands and can be paused.
+*   **Gradio GUI:** Provides comprehensive control and monitoring for all major functions.
+*   **Evaluation Suite:** Includes `evaluate.py` for formal testing of model capabilities.
 
-Example Gradio Interaction
+## Next Steps
 
-    Master Commands:
-        Input: MASTER: Write a function, Key: 8f9b7f8f...
-        Output: “Serving Master: Baby AI: Generated code:\npython\ndef add(a, b):\n return a + b\n”
-    Research:
-        Click “Trigger Research”
-        Output: ```json [{"topic": "python beginner tutorial", "sources": ["github_beginner", "study_guides"], "success": true}]
-    Source Discovery:
-        Click “Discover Sources”
-        Output: ```json [{"source": "python_blog", "url": "https://python-blog.example.com", "score": 0.8, "added": true}]
-    Status:
-        Click “Get Status”
-        Output: ```json { "stage": "baby", "parameters": "1,000,000", "tasks": {"write_functions": 1, "unit_test_accuracy": 0}, "gaps": [], "sources": ["github_beginner", "study_guides", "python_blog"] }
-    Growth:
-        Input Key, Click “Approve Growth”
-        Output: “Baby growth approved!” (after tasks)
+*   **Advanced Generation:** Improve the `generate` method in `PythonMasterAI` for more complex and coherent outputs.
+*   **Custom Tokenizer:** Train a ByteLevelBPETokenizer on a larger Python-specific corpus.
+*   **Real Source Search Integration:** Replace simulated source discovery with actual Google API or GitHub API calls.
+*   **Unit Test Expansion:** Develop more comprehensive unit tests for all AI tasks and capabilities.
+*   **RAG Implementation:** Integrate a Retrieval Augmented Generation pipeline (e.g., using LangChain) for more informed responses.
+*   **Refine Evaluation:** Enhance `evaluate.py` with more sophisticated metrics and test cases.
+*   **Scaling:** Progress through toddler, teenager, and adult stages, implementing more complex tasks and architectural changes.
 
-Challenges and Solutions
+## Example Gradio Interaction
 
-    Tiny Capacity: Simple tasks, RAG, grow to toddler.
-    Source Discovery: Simulated search; integrate real APIs later.
-    Teenage Rebellion: HALT_TEEN resets.
-    Security: Hardcoded key, Docker, GUI key validation.
-    Compute: CPU for baby, GPU for teenager.
+(This section can be updated as the AI's generation capabilities improve)
+
+*   **Master Commands:**
+    *   Input: `MASTER: Write a function to sum a list of numbers`, Key: `8f9b7f8f...`
+    *   Output: (AI's generated code for the sum function)
+*   **Dataset Management:**
+    *   Select "baby" stage, view versions, select a version, view its manifest or files.
+
+## Challenges and Solutions
+
+*   **Generation Quality:** Initial generation is basic. Requires significant training and larger model sizes.
+*   **Compute Resources:** CPU is feasible for early stages, but GPU will be necessary for larger models and extensive training.
+*   **Security:** Master key provides basic protection. `RestrictedPython` in `evaluate.py` offers some safety for code execution, but true sandboxing for arbitrary code is complex.
+
+## ⚠️ Work-in-Progress Notice
+
+**PythonMasterAI is an experimental, self-evolving AI project.**
+- The codebase, model architecture, and training/evaluation scripts are under active development.
+- Features, APIs, and behaviors may change frequently as the AI grows and new capabilities are added.
+- Expect bugs, incomplete features, and evolving best practices.
+
+## Code Generation & Evaluation Usage
+
+**Deprecated:** `generate_code()`
+- The method `generate_code()` is now deprecated and has been removed from the codebase.
+- For all code generation and evaluation tasks, use:
+
+```python
+model.generate_for_evaluation(prompt_text, task_type="code_generation")
+```
+- For explanations or other tasks, set `task_type` accordingly (e.g., `"concept_explanation"`).
+- See `python_master_ai.py` for the latest method signatures and options.
+
+## Current Limitations & Growth
+- The model is currently at the "baby" stage: it can generate simple Python code and explanations, but output quality is basic.
+- Tokenization and mask handling are robust to common errors, but edge cases may still exist.
+- Model growth (increasing layers/parameters) is triggered by evaluation results and requires master approval.
+- The project is designed to evolve: expect rapid changes, new features, and breaking changes as it matures.
+
+## Contributing & Feedback
+- Contributions, bug reports, and suggestions are welcome! Please open issues or pull requests as appropriate.
+- For questions about usage or development, see the code comments and this Readme for guidance.

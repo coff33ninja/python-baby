@@ -1,0 +1,80 @@
+# config.yaml
+# Central configuration file for PythonMasterAI.
+# Settings here control model architecture, training parameters, evaluation,
+# scraping behavior, logging, and GUI elements.
+
+# Default PythonMasterAI Model Architecture
+master_service:
+  auth_url: "http://localhost:8000/master/auth" # URL for the master key authentication service
+
+model_defaults:
+  vocab_size: 16000         # Size of the vocabulary used by the tokenizer and model.
+  n_layers: 2               # Number of transformer encoder layers.
+  n_heads: 4                # Number of attention heads in each transformer layer.
+  hidden_size: 256          # Dimensionality of the model's hidden states (embedding size).
+  dropout: 0.1              # Dropout rate used in various parts of the model.
+  dim_feedforward_factor: 4 # Factor to multiply hidden_size by to get the feedforward network's inner dimension.
+  activation: "relu"        # Activation function used in the feedforward networks (e.g., "relu", "gelu").
+
+# Training Defaults
+training_defaults:
+  learning_rate: 0.0001     # Initial learning rate for the optimizer.
+  batch_size: 4             # Number of samples processed before the model's parameters are updated.
+  num_epochs: 5             # Number of times the entire training dataset is passed through the model.
+  gradient_clipping_norm: 1.0 # Maximum norm for gradient clipping to prevent exploding gradients. Set to 0 to disable.
+  lr_scheduler:               # Configuration for the learning rate scheduler.
+    step_size: 1            # Number of epochs after which the learning rate is decayed.
+    gamma: 0.7              # Multiplicative factor of learning rate decay (e.g., new_lr = old_lr * gamma).
+
+# Checkpointing Configuration
+checkpointing:
+  checkpoint_dir: "checkpoints" # Directory where model checkpoints are saved during training.
+
+# Evaluation Configuration
+evaluation:
+  default_eval_dataset: "sample_evaluation_dataset.jsonl"
+  results_dir: "eval_results"
+  tokenizer_max_input_length: 512 # Max input length for tokenizer during evaluation prompt construction
+  secure_exec_timeout: 10
+
+# Scraper Configuration
+scraper:
+  default_user_agent: "PythonMasterAI/1.0 (Configurable Scraper)"
+  pypi_fetch:
+    retry_attempts: 3
+    timeout: 15 # seconds
+  scrapy: # Scrapy specific settings
+    retry_enabled: true
+    retry_times: 3      # Number of times to retry failed requests
+    # HTTP response codes to retry on.
+    retry_http_codes: [500, 502, 503, 504, 522, 524, 408, 429]
+    autothrottle_enabled: true
+    autothrottle_start_delay: 1.0 # Initial download delay (seconds)
+    autothrottle_max_delay: 10.0  # Max download delay under high load (seconds)
+    autothrottle_target_concurrency: 1.0 # Desired average number of parallel requests to each domain
+    download_delay: 0.5 # Base delay (seconds) between requests if AUTOTHROTTLE_ENABLED is False
+    concurrent_requests_per_domain: 8 # Max concurrent requests to any single domain
+
+# Logging Configuration
+logging:
+  log_file: project_ai.log # Path to the log file. Set to null or omit to disable file logging.
+  console_level: INFO    # Logging level for console output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  file_level: DEBUG       # Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  tensorboard_log_dir: runs/python_master_ai_experiment # For TensorBoard logging
+  max_in_memory_log_entries: 1000 # Max number of entries for in-memory logs (performance, research, source) in PythonMasterAI
+
+# In your config.yaml
+gui_settings:
+  file_preview:
+    max_bytes: 1048576  # Maximum bytes to read from a file for preview in the GUI (e.g., 1MB).
+    max_lines: 200      # Maximum lines to display from a file for preview in the GUI.
+  script_execution_timeout: 3600 # Timeout in seconds for scripts (train.py, scrape_data.py) run from the GUI. Default: 1 hour.
+
+growth:
+  master_approval_url: "http://localhost:8000/master/auth" # URL for master key service
+  strategy:
+    parameter: "n_layers"  # Which model parameter to change (e.g., "n_layers", "n_heads", "hidden_size")
+                           # Note: PythonMasterAI.__init__ currently best handles 'n_layers' growth.
+                           # Other parameters would require more sophisticated weight transfer logic there.
+    increment: 1           # Additive value for integer parameters
+    factor: 1.0            # Multiplicative factor (e.g., 1.2 for 20% increase, 1.0 for no multiplicative change)

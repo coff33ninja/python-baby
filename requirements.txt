@@ -1,0 +1,35 @@
+# Core ML and Data Handling
+torch
+transformers
+datasets
+evaluate
+
+# Web API (for master_key.py and potentially other services)
+fastapi
+uvicorn
+
+# Web Scraping
+requests
+Scrapy
+scrapy-playwright
+playwright
+
+# GUI
+gradio
+
+# PDF Processing (Optional for GUI uploads)
+PyPDF2
+
+# Secure Code Execution (for evaluation suite)
+RestrictedPython
+
+# Configuration Management
+PyYAML
+
+# Testing
+pytest
+pytest-cov
+evaluate
+tenacity
+protobuf
+tensorboard
