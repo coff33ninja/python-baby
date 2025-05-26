@@ -200,8 +200,8 @@ def test_parse_exception_during_bs_fallback(mock_bs_constructor, spider_instance
 
     spider_instance.logger.error.assert_called_once()
     args, kwargs = spider_instance.logger.error.call_args
-    assert "Error parsing" in args[0]
-    assert "BS Critical Error" in str(kwargs.get('exc_info'))
+    assert "Error parsing" in args[0]  # nosec B101
+    assert "BS Critical Error" in str(kwargs.get("exc_info"))  # nosec B101
 
 
 def test_parse_response_css_raises_exception(spider_instance):
@@ -219,7 +219,7 @@ def test_parse_response_css_raises_exception(spider_instance):
     assert item['parser_used'] == "Scrapy CSS Selector" # Initial value before error  # nosec B101
     spider_instance.logger.error.assert_called_once()
     args, kwargs = spider_instance.logger.error.call_args
-    assert "Error parsing" in args[0]
+    assert "Error parsing" in args[0]  # nosec B101
     assert "CSS Selector Engine Failed" in str(kwargs.get('exc_info'))  # nosec B101
 
 # --- Section I: Tests for SaveToFilePipeline ---
