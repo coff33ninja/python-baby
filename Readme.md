@@ -30,6 +30,24 @@ python scrape_data.py baby # Scrapes default sources for baby stage
 # python scrape_data.py baby github_beginner https://api.github.com/search/repositories?q=language:python+stars:>100
 ```
 
+#### Advanced Scraping Features
+
+The `scrape_data.py` script includes several advanced features to enhance data collection and traceability:
+
+*   **Source URL Tracking:** Scraped data now includes metadata about its origin. For each text file generated from a web page (e.g., `sourcename.txt`), a corresponding `.meta.json` file (e.g., `sourcename.txt.meta.json`) is created in the same directory. This metadata file stores the original `source_url` from which the content was scraped and a `scraped_timestamp`.
+
+*   **API-based Source Discovery:** The script can discover new potential sources using configured APIs. To use this, provide the `--query` argument:
+    ```bash
+    python scrape_data.py <stage> --query "your research query"
+    # Example:
+    # python scrape_data.py baby --query "python async programming examples"
+    ```
+    This will use services like GitHub Search and Google Custom Search (if `api_config.json` is correctly set up with your API keys) to find relevant URLs based on your query. These discovered URLs will then be scraped.
+
+*   **Website Archiving (Experimental):** To support offline training and ensure data consistency, the scraper has the capability to archive the raw content of websites. When this feature is active (currently controlled internally, future versions may expose a configuration), full HTML pages or raw API responses are saved into a structured directory: `data/<stage>/<version_timestamp>/archived_sites/domain/path/to/file.html`. This allows the AI to train on local, versioned copies of source material.
+
+*   **Enhanced PyPI Data:** When processing packages from PyPI, the scraper now saves the complete raw JSON response received from the PyPI API (e.g., `pypi_package_requests_raw.json`) and ensures the full, unprocessed README file is stored. This provides richer, more complete data for these sources.
+
 ### Master Key API:
 
 The Master Key API (`master_key.py`) is used for approving critical actions like model growth.
@@ -89,6 +107,10 @@ See `sample_evaluation_dataset.jsonl` for task examples. Evaluation results, inc
 *   **Python Code Generation:** Generates simple Python functions (e.g., `def add(a, b): return a + b`).
 *   **Explanations:** Provides basic explanations for Python concepts or code snippets.
 *   **Self-Scraping & Data Versioning:** Collects data from sources like GitHub, study guides, Stack Overflow, and Reddit. Datasets are versioned with timestamps and manifests.
+    *   Tracks source URLs and timestamps for all scraped web content via metadata files.
+    *   Supports API-driven discovery of new sources using GitHub and Google Search.
+    *   Includes capability for raw website content archiving for offline use.
+    *   Saves complete raw JSON and full READMEs from PyPI.
 *   **Self-Research:** Identifies knowledge gaps, formulates queries, and processes scraped data to fill these gaps.
 *   **Self-Source Discovery:** Simulates finding new data sources.
 *   **Self-Growth & Checkpointing:** Tracks task completion for growth. Model checkpoints are saved during training and after growth. Grown models use a weight seeding strategy.

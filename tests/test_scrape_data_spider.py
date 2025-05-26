@@ -1,12 +1,15 @@
 import pytest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch, call, mock_open
 from scrapy.http import HtmlResponse, Response # Added Response for non-HTML
 import os
+import json
+from datetime import datetime # For checking timestamp format
+import requests # For requests.exceptions.RequestException
 
 # Ensure the scrape_data module can be imported.
 # This might require PYTHONPATH adjustments depending on execution context.
 # For now, assume it's discoverable.
-from scrape_data import PythonSpider
+from scrape_data import PythonSpider, SaveToFilePipeline, _load_api_config_for_scraper, discover_urls_from_query, fetch_pypi_updates, API_CONFIG_FILE_PATH_SCRAPER
 
 @pytest.fixture
 def spider_instance(tmp_path):
@@ -218,3 +221,268 @@ def test_parse_response_css_raises_exception(spider_instance):
     args, kwargs = spider_instance.logger.error.call_args
     assert "Error parsing" in args[0]
     assert "CSS Selector Engine Failed" in str(kwargs.get('exc_info'))
+
+# --- Section I: Tests for SaveToFilePipeline ---
+
+@pytest.fixture
+def pipeline_instance():
+    return SaveToFilePipeline()
+
+def test_pipeline_saves_metadata_for_text_item(pipeline_instance, spider_instance, tmp_path):
+    test_file_path = tmp_path / "test_output.txt"
+    item = {
+        "file": str(test_file_path),
+        "content": "This is test content.",
+        "source": "test_source_metadata",
+        "source_url": "http://example.com/metadata-test",
+        "parser_used": "Scrapy CSS Selector" 
+    }
+    
+    pipeline_instance.process_item(item, spider_instance)
+
+    assert test_file_path.exists()
+    with open(test_file_path, "r") as f:
+        assert "This is test content." in f.read()
+
+    meta_file_path = tmp_path / "test_output.txt.meta.json"
+    assert meta_file_path.exists()
+    with open(meta_file_path, "r") as f:
+        meta_data = json.load(f)
+    
+    assert meta_data["source_url"] == "http://example.com/metadata-test"
+    assert "scraped_timestamp" in meta_data
+    try:
+        datetime.fromisoformat(meta_data["scraped_timestamp"])
+    except ValueError:
+        pytest.fail("scraped_timestamp is not a valid ISO format datetime string")
+
+def test_pipeline_archives_raw_content(pipeline_instance, spider_instance, tmp_path):
+    archive_item = {
+        "source_url": "http://example.com/path/to/page.html",
+        "source_name": "example_archive", # Used by spider, not directly by pipeline for path
+        "version_data_dir": str(tmp_path),
+        "is_archive_item": True,
+        "raw_response_body": b"<html>Test archive content</html>",
+        "response_headers": {"Content-Type": "text/html"}
+    }
+    
+    pipeline_instance.process_item(archive_item, spider_instance)
+
+    expected_archive_path = tmp_path / "archived_sites" / "example_com" / "path" / "to" / "page.html"
+    assert expected_archive_path.exists()
+    with open(expected_archive_path, "rb") as f:
+        assert f.read() == b"<html>Test archive content</html>"
+    spider_instance.logger.info.assert_any_call(f"Archived raw content from http://example.com/path/to/page.html to {expected_archive_path}")
+
+
+def test_pipeline_archives_raw_content_no_extension_infer_from_content_type(pipeline_instance, spider_instance, tmp_path):
+    archive_item = {
+        "source_url": "http://example.com/api/data",
+        "source_name": "example_api",
+        "version_data_dir": str(tmp_path),
+        "is_archive_item": True,
+        "raw_response_body": b'{"key": "value"}',
+        "response_headers": {"Content-Type": "application/json; charset=utf-8"} # Include charset
+    }
+    pipeline_instance.process_item(archive_item, spider_instance)
+    expected_archive_path = tmp_path / "archived_sites" / "example_com" / "api" / "data.json" # data part becomes filename
+    assert expected_archive_path.exists()
+    with open(expected_archive_path, "rb") as f:
+        assert f.read() == b'{"key": "value"}'
+
+def test_pipeline_archives_content_type_missing_uses_default_name(pipeline_instance, spider_instance, tmp_path):
+    archive_item = {
+        "source_url": "http://example.com/api/endpoint",
+        "source_name": "example_endpoint",
+        "version_data_dir": str(tmp_path),
+        "is_archive_item": True,
+        "raw_response_body": b"raw data",
+        "response_headers": {} # No Content-Type
+    }
+    pipeline_instance.process_item(archive_item, spider_instance)
+    # The logic is: path is /api/endpoint. 'endpoint' has no extension.
+    # Content-Type is missing. So it defaults to 'index.dat' under the 'endpoint' directory.
+    expected_archive_path = tmp_path / "archived_sites" / "example_com" / "api" / "endpoint" / "index.dat"
+    assert expected_archive_path.exists()
+    with open(expected_archive_path, "rb") as f:
+        assert f.read() == b"raw data"
+
+# --- Section II: Tests for API-based Source Discovery ---
+
+# Part 1: _load_api_config_for_scraper
+@patch('scrape_data.os.path.exists')
+@patch('scrape_data.open', new_callable=mock_open)
+def test_load_api_config_success(mock_open_file, mock_exists):
+    mock_exists.return_value = True
+    mock_open_file.return_value.read.return_value = '{"api_keys": {"google_custom_search_api_key": "test_key"}}'
+    
+    config = _load_api_config_for_scraper()
+    
+    assert config == {"api_keys": {"google_custom_search_api_key": "test_key"}}
+    mock_open_file.assert_called_once_with(API_CONFIG_FILE_PATH_SCRAPER, "r")
+
+@patch('scrape_data.os.path.exists')
+def test_load_api_config_file_not_found(mock_exists, caplog):
+    mock_exists.return_value = False
+    
+    config = _load_api_config_for_scraper()
+    
+    assert config == {}
+    assert f"API configuration file {API_CONFIG_FILE_PATH_SCRAPER} not found" in caplog.text
+
+@patch('scrape_data.os.path.exists')
+@patch('scrape_data.open', new_callable=mock_open)
+def test_load_api_config_invalid_json(mock_open_file, mock_exists, caplog):
+    mock_exists.return_value = True
+    mock_open_file.return_value.read.return_value = '{"bad json' 
+    
+    config = _load_api_config_for_scraper()
+    
+    assert config == {}
+    assert f"Error reading or parsing API config file {API_CONFIG_FILE_PATH_SCRAPER}" in caplog.text
+
+
+# Part 2: discover_urls_from_query
+@pytest.fixture
+def api_config_google_only():
+    return {
+        "api_keys": {"google_custom_search_api_key": "fake_google_key", "google_custom_search_cx_id": "fake_cx_id"},
+        "api_endpoints": {"google_custom_search": "https://fakeapi.google.com/customsearch/v1"},
+        "search_parameters": {"google_search_default_num_results": "1"}
+    }
+
+@pytest.fixture
+def api_config_github_only():
+    return {
+        "api_keys": {"github_pat": "fake_github_pat"},
+        "api_endpoints": {"github_search_repositories": "https://fakeapi.github.com/search/repositories"},
+        "search_parameters": {"github_repo_default_query_params": "sort=stars&order=desc"}
+    }
+
+@patch('scrape_data.requests.get')
+def test_discover_urls_google_success(mock_requests_get, api_config_google_only):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"items": [{"title": "Test Google Result", "link": "http://google-result.com/test"}]}
+    mock_requests_get.return_value = mock_response
+
+    discovered = discover_urls_from_query("test query", api_config_google_only)
+    
+    expected_url = "https://fakeapi.google.com/customsearch/v1?key=fake_google_key&cx=fake_cx_id&q=test query&num=1"
+    mock_requests_get.assert_called_once_with(expected_url, timeout=10)
+    assert len(discovered) == 1
+    source_name, url = discovered[0]
+    assert url == "http://google-result.com/test"
+    assert "web_discovered_google_result_com_Test_Google_Result" in source_name
+
+
+@patch('scrape_data.requests.get')
+def test_discover_urls_github_success(mock_requests_get, api_config_github_only):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"items": [{"full_name": "user/repo", "html_url": "http://github.com/user/repo"}]}
+    mock_requests_get.return_value = mock_response
+
+    discovered = discover_urls_from_query("test query", api_config_github_only)
+
+    expected_url = "https://fakeapi.github.com/search/repositories?q=test query python&sort=stars&order=desc"
+    mock_requests_get.assert_called_once_with(expected_url, headers={"Authorization": "token fake_github_pat", "Accept": "application/vnd.github.v3+json"}, timeout=10)
+    assert len(discovered) == 1
+    source_name, url = discovered[0]
+    assert url == "http://github.com/user/repo"
+    assert source_name == "github_discovered_user_repo"
+
+@patch('scrape_data.requests.get')
+def test_discover_urls_api_error(mock_requests_get, api_config_google_only, caplog):
+    mock_requests_get.side_effect = requests.exceptions.RequestException("API down")
+    
+    discovered = discover_urls_from_query("test query", api_config_google_only)
+    
+    assert discovered == []
+    assert "Google Custom Search API failed for query 'test query': API down" in caplog.text
+
+def test_discover_urls_no_config(caplog): # Removed spider_instance as it's not used
+    discovered = discover_urls_from_query("test query", {})
+    assert discovered == []
+    assert "API config is empty. Cannot perform dynamic discovery." in caplog.text
+
+# --- Section III: Tests for fetch_pypi_updates ---
+
+@patch('scrape_data.requests.get')
+def test_fetch_pypi_saves_raw_json(mock_requests_get, tmp_path, caplog):
+    mock_response_json = {"info": {"summary": "Test summary", "description": "Test Readme", "version": "1.0"}}
+    
+    mock_api_response = MagicMock()
+    mock_api_response.status_code = 200
+    mock_api_response.json.return_value = mock_response_json
+    mock_requests_get.return_value = mock_api_response
+
+    package_name = "testpackage"
+    result = fetch_pypi_updates(package_name, str(tmp_path))
+
+    raw_json_filename = f"pypi_package_{package_name}_raw.json"
+    expected_raw_json_path = tmp_path / raw_json_filename
+    
+    assert expected_raw_json_path.exists()
+    with open(expected_raw_json_path, "r") as f:
+        saved_data = json.load(f)
+    assert saved_data == mock_response_json
+    
+    assert result["raw_json_file_saved"] == raw_json_filename
+    assert result["summary_file_saved"] == f"pypi_package_{package_name}.txt" # Check other keys too
+    assert result["readme_file_saved"] == f"pypi_package_{package_name}_README.txt" # Default ext if no content type for desc
+
+@patch('scrape_data.requests.get')
+@patch('scrape_data.json.dump') # Patch json.dump directly for this test
+def test_fetch_pypi_raw_json_save_error(mock_json_dump, mock_requests_get, tmp_path, caplog):
+    mock_response_json = {"info": {"summary": "Test summary", "description": "Test Readme", "version": "1.0"}}
+    
+    mock_api_response = MagicMock()
+    mock_api_response.status_code = 200
+    mock_api_response.json.return_value = mock_response_json
+    mock_requests_get.return_value = mock_api_response
+
+    # Make json.dump raise an error when attempting to write the raw json file
+    # This is a bit broad, but simpler than patching 'open' for just one write.
+    # We rely on the call order: summary, then raw_json, then readme.
+    # The first call to json.dump will be for the raw json file.
+    mock_json_dump.side_effect = IOError("Disk full")
+
+    package_name = "testpackage_json_fail"
+    result = fetch_pypi_updates(package_name, str(tmp_path))
+
+    assert result["raw_json_file_saved"] is None
+    assert "Error saving raw PyPI JSON" in caplog.text
+    assert "Disk full" in caplog.text
+    # Summary should still be saved as it's written before raw JSON attempt.
+    # However, json.dump is globally patched. This test needs refinement.
+    # For simplicity, let's assume the error is specific to raw json.
+    # A better patch would be:
+    # with patch('builtins.open', new_callable=mock_open) as m_open:
+    #     m_open.side_effect = [mock_open().return_value, # for summary
+    #                           IOError("Disk full"),     # for raw json
+    #                           mock_open().return_value] # for readme
+    # This is complex to set up with multiple open calls.
+    # The current patch on json.dump will affect all json.dump calls in the function.
+    # Given the current structure of fetch_pypi_updates, the raw JSON is saved first.
+    # The provided snippet saves raw JSON *after* response.json() but *before* summary/readme.
+    # Let's re-verify the snippet: "Save the raw JSON response" is right after data = response.json().
+    # So if json.dump for raw json fails, summary/readme saving might not occur or also fail.
+    # The test prompt's snippet for fetch_pypi_updates has raw JSON saving *after* response.json().
+    # Let's adjust the expectation based on current `fetch_pypi_updates` structure from previous turn.
+    # If `json.dump` is the first `json.dump` in the try block for raw json, this test is okay.
+
+    # Re-checking the provided snippet:
+    # data = response.json()
+    # raw_json_filename = ...
+    # try: json.dump(data, ...) <--- This is the one we are targetting
+    # except: raw_json_filename = None
+    # summary_content = ...
+    # with open(output_filepath, "a", encoding="utf-8") as f: f.write(summary_content + "\n") <-- this is text write.
+    # So, json.dump is only for the raw JSON. The summary and readme are plain text writes.
+    # Thus, patching json.dump is specific enough.
+
+    # Summary and readme are *not* saved using json.dump, they use f.write.
+    # So this patch is fine.
+    assert result["summary_file_saved"] is not None # Summary should be saved as it's a text write.
+    assert result["readme_file_saved"] is not None # Readme also a text write.

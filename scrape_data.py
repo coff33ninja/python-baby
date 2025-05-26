@@ -8,6 +8,9 @@ import time
 import logging  # Standard logging
 from datetime import datetime
 import json
+import argparse # Added for command-line argument processing
+from urllib.parse import urlparse # Added for URL parsing in discovery
+import re # For sanitization
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -24,6 +27,9 @@ from utils import (
 # --- Initialize logger for this module ---
 logger = logging.getLogger(__name__)
 
+# Define the path to the API configuration file, used by scraper's discovery functions
+API_CONFIG_FILE_PATH_SCRAPER = "api_config.json"
+
 # Scrapy's own logging is configured via settings, but we can reduce verbosity
 # of some of its components if they are too noisy at the global level.
 # However, setup_logging() will configure the root logger, which Scrapy also uses.
@@ -33,36 +39,113 @@ logger = logging.getLogger(__name__)
 # logging.getLogger('scrapy.extensions.telnet').setLevel(logging.WARNING)
 # logging.getLogger('scrapy.middleware').setLevel(logging.WARNING)
 
+# Helper function for sanitizing (can be outside class or static)
+def sanitize_path_segment(segment):
+    if not segment:
+        return "_" # Replace empty segments
+    # Remove or replace characters invalid for filenames/paths
+    # Basic example: replace non-alphanumeric with underscore
+    # For more robust, consider a library or more comprehensive regex
+    segment = re.sub(r'[^a-zA-Z0-9._-]', '_', segment)
+    return segment[:200] # Limit length
 
 class SaveToFilePipeline:
-    def process_item(self, item, spider):  # spider.logger is Scrapy's logger
-        file_path = item.get("file")
-        content = item.get("content")
+    def process_item(self, item, spider):
+        if item.get("is_archive_item"):
+            # --- Archiving Logic ---
+            source_url = item.get("source_url")
+            raw_body = item.get("raw_response_body")
+            headers = item.get("response_headers", {})
+            version_dir = item.get("version_data_dir")
 
-        if not file_path:
-            spider.logger.warning(
-                f"Missing 'file' key in item from {spider.name} for source {item.get('source', 'unknown')}. Item will not be saved. Item: {item}"
-            )
+            if not all([source_url, raw_body is not None, version_dir]):
+                spider.logger.error(f"Archive item for {source_url} missing critical data. Item keys: {item.keys()}")
+                return item # Or raise DropItem
+
+            parsed_url = urlparse(source_url)
+            domain = sanitize_path_segment(parsed_url.netloc)
+            
+            # Handle path segments carefully
+            path_from_url = parsed_url.path.strip('/')
+            path_segments_raw = [seg for seg in path_from_url.split('/') if seg] # Get raw segments
+
+            # Determine filename
+            # Default filename if path ends in / or is empty
+            potential_filename_from_path = os.path.basename(parsed_url.path)
+            
+            filename = "index.dat" # Ultimate fallback
+            has_extension = '.' in potential_filename_from_path
+
+            if potential_filename_from_path and has_extension:
+                filename = sanitize_path_segment(potential_filename_from_path)
+                # If filename was derived from path, remove it from path_segments_raw if it's the last one
+                if path_segments_raw and path_segments_raw[-1] == potential_filename_from_path:
+                    path_segments_raw = path_segments_raw[:-1]
+            else: # No clear filename from path (e.g. /foo/bar/ or /foo/bar or just /)
+                content_type = headers.get("Content-Type", "").split(";")[0].strip().lower()
+                if content_type == "text/html":
+                    filename = "index.html"
+                elif content_type == "application/json":
+                    filename = "data.json"
+                elif content_type == "text/plain":
+                    filename = "content.txt"
+                # If path_segments_raw is not empty and filename is still index.dat (or similar default)
+                # it means the last segment of the URL path was not treated as a file.
+                # e.g. for /foo/bar, path_segments_raw = ["foo", "bar"], filename="index.html" (if text/html)
+            
+            # Sanitize all raw path segments
+            true_path_segments = [sanitize_path_segment(seg) for seg in path_segments_raw]
+
+            archive_base_dir = os.path.join(version_dir, "archived_sites")
+            target_dir_path = os.path.join(archive_base_dir, domain, *true_path_segments)
+            archive_file_path = os.path.join(target_dir_path, filename) # filename is already sanitized
+            
+            try:
+                os.makedirs(target_dir_path, exist_ok=True)
+                with open(archive_file_path, "wb") as f: # Write bytes
+                    f.write(raw_body)
+                spider.logger.info(f"Archived raw content from {source_url} to {archive_file_path}")
+            except Exception as e:
+                spider.logger.error(f"Error archiving {source_url} to {archive_file_path}: {e}", exc_info=True)
             return item
-        if content is None:
-            spider.logger.warning(
-                f"Missing 'content' in item for {file_path}. Item: {item}"
-            )
-            content = ""
+        else:
+            # --- Existing Text and Meta.json Saving Logic ---
+            file_path = item.get("file")
+            content = item.get("content")
 
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            if not file_path: # This check is for the text item
+                spider.logger.warning(f"Missing 'file' key in standard text item from {spider.name} for source {item.get('source', 'unknown')}. Item will not be saved. Item: {item}")
+                return item
+            if content is None: # Check for None, empty string is fine
+                spider.logger.warning(f"Missing 'content' in standard text item for {file_path}. Item: {item}")
+                content = "" # Default to empty string if None
 
-        try:
-            with open(file_path, "a", encoding="utf-8") as f:
-                f.write(content + "\n")
-            spider.logger.debug(
-                f"Appended content to {file_path} for source {item.get('source')}"
-            )
-        except Exception as e:
-            spider.logger.error(
-                f"Error writing to file {file_path}: {e}", exc_info=True
-            )
-        return item
+            # This os.makedirs is for the .txt file
+            os.makedirs(os.path.dirname(file_path), exist_ok=True) 
+            try:
+                with open(file_path, "a", encoding="utf-8") as f:
+                    f.write(content + "\n")
+                spider.logger.debug(f"Appended content to {file_path} for source {item.get('source')}")
+            except Exception as e:
+                spider.logger.error(f"Error writing to file {file_path}: {e}", exc_info=True)
+            
+            source_url = item.get("source_url") # This is for the .meta.json file
+            if source_url:
+                meta_file_path = file_path + ".meta.json"
+                metadata = {
+                    "source_url": source_url,
+                    "scraped_timestamp": datetime.now().isoformat() # Ensure datetime is imported
+                }
+                try:
+                    # Directory for .meta.json (same as .txt file) should already exist
+                    with open(meta_file_path, "w", encoding="utf-8") as meta_f:
+                        json.dump(metadata, meta_f, indent=4)
+                    spider.logger.debug(f"Saved metadata to {meta_file_path} for source {item.get('source')}")
+                except Exception as e:
+                    spider.logger.error(f"Error writing metadata to {meta_file_path}: {e}", exc_info=True)
+            else:
+                spider.logger.warning(f"Missing 'source_url' in standard text item for {file_path} from {spider.name}. Metadata file will not be created. Item: {item}")
+            return item
 
 
 class PythonSpider(scrapy.Spider):
@@ -206,26 +289,136 @@ class PythonSpider(scrapy.Spider):
                     else:
                          self.logger.warning(f"BeautifulSoup parsing (generic p tags) also yielded no meaningful content for {response.url} (source: '{self.source}'). Original Scrapy content (if any) will be used or content will be empty.")
 
-            # Common yield statement
+            # Common yield statement for extracted text
             yield {
                 "content": extracted_content[:1000] if extracted_content else "", # Truncate after extraction
                 "file": output_filepath,
                 "source": self.source,
-                "parser_used": parser_used # For logging/debugging
+                "parser_used": parser_used, # For logging/debugging
+                "source_url": response.url
             }
+
+            # --- New: Yield archive item if applicable ---
+            # For this subtask, to simplify, let's assume 'archive_this_source' is True for demonstration
+            archive_this_source = True # Placeholder for actual config check logic
+            # This would typically be:
+            # archive_globally = get_typed_config_value("scraper.archive_sources", False, bool)
+            # archive_this_source = get_typed_config_value(f"scraper.sources.{self.source}.archive", archive_globally, bool)
+
+            if archive_this_source:
+                self.logger.info(f"Yielding archive item for {response.url} (source: {self.source})")
+                yield {
+                    "source_url": response.url,
+                    "source_name": self.source, 
+                    "version_data_dir": self.version_data_dir,
+                    "is_archive_item": True,
+                    "raw_response_body": response.body, # bytes
+                    "response_headers": {k.decode('utf-8', 'ignore'): [v.decode('utf-8', 'ignore') for v in vs] 
+                                         for k, vs in response.headers.items()}
+                }
 
         except Exception as e:
             self.logger.error(
                 f"Error parsing {response.url} for source {self.source}. Parser used at time of error: {parser_used}. Error: {e}",
                 exc_info=True,
             )
+            # Ensure response.url is accessed safely, though it should be available if parse was called
+            url_for_error_item = response.url if response else "unknown_url_due_to_error"
             yield {
                 "content": f"Error processing {self.source}. See logs.",
                 "file": output_filepath,
                 "source": self.source,
                 "parser_used": parser_used, # Log parser even in case of error
+                "source_url": url_for_error_item
             }
 
+# --- API-based Source Discovery Functions ---
+
+def _load_api_config_for_scraper():
+    if os.path.exists(API_CONFIG_FILE_PATH_SCRAPER):
+        try:
+            with open(API_CONFIG_FILE_PATH_SCRAPER, "r") as f:
+                config = json.load(f)
+            logger.info(f"Scraper: Successfully loaded API configuration from {API_CONFIG_FILE_PATH_SCRAPER}.")
+            return config
+        except Exception as e:
+            logger.error(f"Scraper: Error reading or parsing API config file {API_CONFIG_FILE_PATH_SCRAPER}: {e}. API discovery will be limited.")
+            return {}
+    else:
+        logger.warning(f"Scraper: API configuration file {API_CONFIG_FILE_PATH_SCRAPER} not found. API discovery disabled.")
+        return {}
+
+def discover_urls_from_query(query_str: str, api_config: dict):
+    candidates = [] # List of (source_name, url) tuples
+    logger.info(f"Scraper: Discovering sources for query: '{query_str}'")
+
+    if not api_config:
+        logger.warning("Scraper: API config is empty. Cannot perform dynamic discovery.")
+        return candidates
+
+    api_keys = api_config.get("api_keys", {})
+    api_endpoints = api_config.get("api_endpoints", {})
+    search_params_config = api_config.get("search_parameters", {})
+
+    # --- GitHub Repository Search (Simplified from PythonMasterAI) ---
+    github_pat = api_keys.get("github_pat")
+    github_repo_search_url = api_endpoints.get("github_search_repositories")
+    # Use a generic query parameter or make it configurable if needed
+    github_repo_query_params = search_params_config.get("github_repo_default_query_params", "sort=stars&order=desc") 
+
+    if github_pat and github_pat != "YOUR_GITHUB_PERSONAL_ACCESS_TOKEN_HERE" and github_repo_search_url:
+        headers = {"Authorization": f"token {github_pat}", "Accept": "application/vnd.github.v3+json"}
+        # Form a query: use the input query_str directly, append "python"
+        search_query_github_repos = f"{query_str} python" 
+        full_github_repo_url = f"{github_repo_search_url}?q={search_query_github_repos}&{github_repo_query_params}"
+        logger.info(f"Scraper: Querying GitHub Repos: {full_github_repo_url}")
+        try:
+            response = requests.get(full_github_repo_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            gh_results = response.json()
+            for i, item in enumerate(gh_results.get("items", [])[:5]): # Limit to top 5
+                repo_name = item.get("full_name")
+                repo_url = item.get("html_url")
+                if repo_name and repo_url:
+                    s_name = f"github_discovered_{repo_name.replace('/', '_')}"
+                    candidates.append((s_name, repo_url))
+                    logger.debug(f"  Added GitHub candidate: {s_name} - {repo_url}")
+        except requests.RequestException as e:
+            logger.error(f"Scraper: GitHub API repo search failed for query '{query_str}': {e}")
+        except json.JSONDecodeError as e:
+             logger.error(f"Scraper: Failed to parse GitHub API repo search response for query '{query_str}': {e}")
+
+    # --- Google Custom Search (Simplified from PythonMasterAI) ---
+    google_api_key = api_keys.get("google_custom_search_api_key")
+    google_cx_id = api_keys.get("google_custom_search_cx_id")
+    google_search_url = api_endpoints.get("google_custom_search")
+    google_num_results = search_params_config.get("google_search_default_num_results", "5")
+
+    if google_api_key and google_api_key != "YOUR_GOOGLE_CSE_API_KEY_HERE" and \
+       google_cx_id and google_cx_id != "YOUR_GOOGLE_CSE_CX_ID_HERE" and google_search_url:
+        
+        full_google_url = f"{google_search_url}?key={google_api_key}&cx={google_cx_id}&q={query_str}&num={google_num_results}"
+        logger.info(f"Scraper: Querying Google CSE: {full_google_url}")
+        try:
+            response = requests.get(full_google_url, timeout=10)
+            response.raise_for_status()
+            google_results = response.json()
+            for i, item in enumerate(google_results.get("items", [])): # Process configured number of results
+                title = item.get("title", f"item_{i}")
+                link = item.get("link")
+                if link:
+                    # Sanitize title for use in source name
+                    safe_title = "".join(c if c.isalnum() else "_" for c in title[:30])
+                    s_name = f"web_discovered_{urlparse(link).netloc.replace('.','_')}_{safe_title}"
+                    candidates.append((s_name, link))
+                    logger.debug(f"  Added Google Search candidate: {s_name} - {link}")
+        except requests.RequestException as e:
+            logger.error(f"Scraper: Google Custom Search API failed for query '{query_str}': {e}")
+        except json.JSONDecodeError as e:
+             logger.error(f"Scraper: Failed to parse Google Custom Search API response for query '{query_str}': {e}")
+    
+    logger.info(f"Scraper: Discovered {len(candidates)} potential new sources for query '{query_str}'.")
+    return candidates
 
 @retry(
     stop=stop_after_attempt(
@@ -248,6 +441,19 @@ def fetch_pypi_updates(package_name: str, version_data_dir: str):
         response = requests.get(url, timeout=pypi_timeout)
         response.raise_for_status()
         data = response.json()
+
+        # Save the raw JSON response
+        raw_json_filename = f"pypi_package_{package_name}_raw.json"
+        raw_json_filepath = os.path.join(version_data_dir, raw_json_filename)
+        try:
+            os.makedirs(os.path.dirname(raw_json_filepath), exist_ok=True) # Should already exist but good practice
+            with open(raw_json_filepath, "w", encoding="utf-8") as f_raw_json:
+                json.dump(data, f_raw_json, ensure_ascii=False, indent=4)
+            logger.info(f"Saved raw PyPI JSON for {package_name} to {raw_json_filepath}")
+        except Exception as e_raw_json:
+            logger.error(f"Error saving raw PyPI JSON for {package_name} to {raw_json_filepath}: {e_raw_json}", exc_info=True)
+            raw_json_filename = None # Indicate failure to save
+
         summary_content = data.get("info", {}).get("summary", "")
         output_filename = f"pypi_package_{package_name}.txt"
         output_filepath = os.path.join(version_data_dir, output_filename)
@@ -280,11 +486,18 @@ def fetch_pypi_updates(package_name: str, version_data_dir: str):
             "summary_content_preview": summary_content[:100],
             "readme_file_saved": readme_filename_saved,
             "readme_content_preview": readme_content[:100] if readme_content else None,
+            "raw_json_file_saved": raw_json_filename # Add this new field
         }
         return result_info
     except (requests.RequestException, RetryError) as e: # Catch RetryError from tenacity
         logger.error(f"Error fetching PyPI data for {package_name}: {e}", exc_info=True)
-        return {"package_name": package_name, "summary_file_saved": None, "readme_file_saved": None, "error": str(e)}
+        return {
+            "package_name": package_name, 
+            "summary_file_saved": None, 
+            "readme_file_saved": None, 
+            "raw_json_file_saved": None, # Add here
+            "error": str(e)
+        }
 
 
 def scrape_data(stage, sources, source_urls):
@@ -426,44 +639,59 @@ def scrape_data(stage, sources, source_urls):
 
 if __name__ == "__main__":
     import sys
+    # argparse is already imported at the top of the file
 
-    # Setup logging as early as possible
-    # setup_logging() will read from config itself.
-    setup_logging()
-    # Scrapy specific loggers can be further tuned here if needed, after global setup
-    # e.g., logging.getLogger('scrapy.core.engine').setLevel(logging.WARNING)
+    setup_logging() # Call early
 
-    if len(sys.argv) < 2:
-        logger.error(
-            "Usage: python scrape_data.py <stage> [source1 url1 source2 url2 ...]"
-        )
-        logger.info(
-            "Example: python scrape_data.py baby github_beginner https://api.github.com/search/repositories?q=language:python+stars:>100"
-        )
+    parser = argparse.ArgumentParser(description="Scrape data for PythonMasterAI.")
+    parser.add_argument("stage", type=str, help="The AI stage for which data is being scraped (e.g., baby, toddler).")
+    parser.add_argument("--query", type=str, help="A query string to discover sources via APIs.")
+    # Use nargs='*' to capture all remaining arguments for source-url pairs
+    parser.add_argument('source_url_pairs', nargs='*', help="Pairs of source_name and source_url to scrape directly.")
+
+    args = parser.parse_args()
+
+    stage_arg = args.stage
+    query_arg = args.query
+    source_url_pairs_arg = args.source_url_pairs
+
+    sources_to_scrape_names = []
+    sources_to_scrape_urls = []
+
+    if query_arg:
+        logger.info(f"Discovery mode: Using query '{query_arg}' to find sources.")
+        api_config_loaded = _load_api_config_for_scraper()
+        if not api_config_loaded:
+            logger.error("API config not loaded. Cannot proceed with query-based discovery. Exiting.")
+            sys.exit(1)
+        
+        discovered_sources = discover_urls_from_query(query_arg, api_config_loaded)
+        if not discovered_sources:
+            logger.warning(f"No sources discovered for query '{query_arg}'. Nothing to scrape.")
+            sys.exit(0)
+        
+        sources_to_scrape_names = [s_info[0] for s_info in discovered_sources]
+        sources_to_scrape_urls = [s_info[1] for s_info in discovered_sources]
+        logger.info(f"Discovered {len(sources_to_scrape_names)} sources to scrape: {sources_to_scrape_names}")
+
+    elif source_url_pairs_arg:
+        if len(source_url_pairs_arg) % 2 != 0:
+            logger.error("Sources and URLs for direct scraping must be provided in pairs.")
+            sys.exit(1)
+        sources_to_scrape_names = [source_url_pairs_arg[i] for i in range(0, len(source_url_pairs_arg), 2)]
+        sources_to_scrape_urls = [source_url_pairs_arg[i] for i in range(1, len(source_url_pairs_arg), 2)]
+        logger.info(f"Direct mode: Scraping specified {len(sources_to_scrape_names)} sources.")
+    
+    # Default to PyPI docs if no other sources are specified by query or direct input
+    # (This maintains part of the original logic for ensuring some data is always available for certain stages)
+    if not sources_to_scrape_names and "pypi_docs" not in sources_to_scrape_names :
+         logger.info("No specific sources from query or arguments, adding 'pypi_docs' by default.")
+         sources_to_scrape_names.append("pypi_docs")
+         sources_to_scrape_urls.append("") # PyPI docs handling is special within scrape_data
+
+    if not sources_to_scrape_names:
+        logger.error(f"No sources specified or discovered for stage '{stage_arg}'. Exiting.")
         sys.exit(1)
 
-    stage_arg = sys.argv[1]
-    source_url_pairs = sys.argv[2:]
-
-    if len(source_url_pairs) % 2 != 0 and source_url_pairs:
-        logger.error("Sources and URLs must be provided in pairs.")
-        sys.exit(1)
-
-    sources_arg = [source_url_pairs[i] for i in range(0, len(source_url_pairs), 2)]
-    urls_arg = [source_url_pairs[i] for i in range(1, len(source_url_pairs), 2)]
-
-    if not sources_arg or "pypi_docs" in sources_arg:
-        if "pypi_docs" not in sources_arg:
-            sources_arg.append("pypi_docs")
-            urls_arg.append("")
-
-    if not sources_arg:
-        logger.error(
-            f"No sources specified or defaulted for stage '{stage_arg}'. Exiting."
-        )
-        sys.exit(1)
-
-    logger.info(
-        f"Starting scrape_data script for stage: {stage_arg}, sources: {sources_arg}"
-    )
-    scrape_data(stage_arg, sources_arg, urls_arg)
+    logger.info(f"Starting scrape_data script for stage: {stage_arg}, sources: {sources_to_scrape_names}")
+    scrape_data(stage_arg, sources_to_scrape_names, sources_to_scrape_urls)
