@@ -195,7 +195,7 @@ def test_parse_exception_during_bs_fallback(mock_bs_constructor, spider_instance
     assert "Error processing bs_exception_source. See logs." in item['content']  # nosec B101
     # The parser_used at time of error would be after Scrapy failed, and BS was being attempted.  # nosec B101
     # The spider sets parser_used to "Scrapy CSS Selector" initially. It's not updated before BS call.
-    # So, if BS itself errors out, parser_used would still be "Scrapy CSS Selector".
+    # So, if BS itself errors out, parser_used would still be "Scrapy CSS Selector".  # nosec B101
     assert item['parser_used'] == "Scrapy CSS Selector"  # nosec B101
 
     spider_instance.logger.error.assert_called_once()
@@ -219,8 +219,8 @@ def test_parse_response_css_raises_exception(spider_instance):
     assert item['parser_used'] == "Scrapy CSS Selector" # Initial value before error  # nosec B101
     spider_instance.logger.error.assert_called_once()
     args, kwargs = spider_instance.logger.error.call_args
-    assert "Error parsing" in args[0]  # nosec B101
-    assert "CSS Selector Engine Failed" in str(kwargs.get('exc_info'))
+    assert "Error parsing" in args[0]
+    assert "CSS Selector Engine Failed" in str(kwargs.get('exc_info'))  # nosec B101
 
 # --- Section I: Tests for SaveToFilePipeline ---
 
